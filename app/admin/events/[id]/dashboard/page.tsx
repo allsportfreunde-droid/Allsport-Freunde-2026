@@ -121,6 +121,25 @@ export default function CheckinDashboardPage() {
   type Tab = "anmeldungen" | "finanzen" | "spenden";
   const [activeTab, setActiveTab] = useState<Tab>("anmeldungen");
 
+  // Tab bar is horizontally scrollable on mobile – keep the active tab in view
+  const tabBarRef = useRef<HTMLDivElement>(null);
+  const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
+  useEffect(() => {
+    const container = tabBarRef.current;
+    const btn = tabRefs.current[activeTab];
+    if (!container || !btn) return;
+    // Not scrollable (sm and up) → nothing to do
+    if (container.scrollWidth <= container.clientWidth) return;
+    const cRect = container.getBoundingClientRect();
+    const bRect = btn.getBoundingClientRect();
+    const gutter = 8; // keep a little breathing room at the edges
+    let delta = 0;
+    if (bRect.left - gutter < cRect.left) delta = bRect.left - gutter - cRect.left;
+    else if (bRect.right + gutter > cRect.right) delta = bRect.right + gutter - cRect.right;
+    // Scroll only the tab container, never the page
+    if (delta !== 0) container.scrollBy({ left: delta, behavior: "smooth" });
+  }, [activeTab]);
+
   const fetchStatus = useCallback(async () => {
     try {
       const [statusRes, finRes] = await Promise.allSettled([
@@ -638,7 +657,10 @@ export default function CheckinDashboardPage() {
           </div>
 
           {/* ── Tab bar ── */}
-          <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
+          <div
+            ref={tabBarRef}
+            className="flex gap-1 bg-gray-100 rounded-xl p-1 overflow-x-auto scrollbar-hide snap-x snap-mandatory sm:overflow-x-visible"
+          >
             {(
               [
                 {
@@ -666,8 +688,11 @@ export default function CheckinDashboardPage() {
             ).map((tab) => (
               <button
                 key={tab.key}
+                ref={(el) => {
+                  tabRefs.current[tab.key] = el;
+                }}
                 onClick={() => setActiveTab(tab.key)}
-                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex-none snap-start flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap sm:flex-1 ${
                   activeTab === tab.key
                     ? "bg-white text-gray-900 shadow-sm"
                     : "text-gray-500 hover:text-gray-700"
