@@ -138,6 +138,30 @@ export default function CheckinDashboardPage() {
   type Tab = "anmeldungen" | "warteliste" | "finanzen" | "spenden";
   const [activeTab, setActiveTab] = useState<Tab>("anmeldungen");
 
+  // Tab bar is horizontally scrollable on mobile – keep the active tab in view
+  const tabBarRef = useRef<HTMLDivElement>(null);
+  const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
+  useEffect(() => {
+    const container = tabBarRef.current;
+    const btn = tabRefs.current[activeTab];
+    if (!container || !btn) return;
+    // All tabs fit (wider viewports) → nothing to scroll
+    if (container.scrollWidth <= container.clientWidth) return;
+    const cRect = container.getBoundingClientRect();
+    const bRect = btn.getBoundingClientRect();
+    const gutter = 8; // keep a little breathing room at the edges
+    const outLeft = bRect.left - gutter < cRect.left;
+    const outRight = bRect.right + gutter > cRect.right;
+    if (!outLeft && !outRight) return; // already fully visible
+    // Align the tab to the container start – that matches snap-start, otherwise
+    // scroll-snap would just pull the scroll position back. Clamped to the end
+    // so the last tab stays reachable.
+    const maxScroll = container.scrollWidth - container.clientWidth;
+    const target = Math.min(Math.max(container.scrollLeft + bRect.left - cRect.left, 0), maxScroll);
+    // Scroll only the tab container, never the page
+    container.scrollTo({ left: target, behavior: "smooth" });
+  }, [activeTab]);
+
   const fetchStatus = useCallback(async () => {
     try {
       const [statusRes, finRes] = await Promise.allSettled([
@@ -751,7 +775,15 @@ export default function CheckinDashboardPage() {
           </div>
 
           {/* ── Tab bar ── */}
-          <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
+          {/* w-0 min-w-full: der Admin-Container (AdminMain) nutzt min-w-min, wodurch
+              die Tab-Leiste sonst auf ihre volle Inhaltsbreite aufgezogen wird und
+              statt ihrer der ganze Inhaltsbereich horizontal scrollt. Mit Breite 0 +
+              min-width 100% traegt sie nichts zur min-content-Breite bei und scrollt
+              selbst. */}
+          <div
+            ref={tabBarRef}
+            className="w-0 min-w-full flex gap-1 bg-gray-100 rounded-xl p-1 overflow-x-auto scrollbar-hide snap-x snap-mandatory"
+          >
             {(
               [
                 {
@@ -786,8 +818,11 @@ export default function CheckinDashboardPage() {
             ).map((tab) => (
               <button
                 key={tab.key}
+                ref={(el) => {
+                  tabRefs.current[tab.key] = el;
+                }}
                 onClick={() => setActiveTab(tab.key)}
-                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex-none snap-start flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap sm:flex-1 ${
                   activeTab === tab.key
                     ? "bg-white text-gray-900 shadow-sm"
                     : "text-gray-500 hover:text-gray-700"
