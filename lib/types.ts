@@ -228,6 +228,25 @@ export interface CheckinParticipant {
   persons: RegistrationPerson[];
 }
 
+/**
+ * A still-pending registration for an event. Everyone who signed up while the
+ * event was already fully booked lands here – the team confirms these entries
+ * from the check-in dashboard.
+ */
+export interface WaitlistEntry {
+  id: number;
+  /** From JOIN with registration_persons (first person) */
+  first_name: string;
+  last_name: string;
+  email: string | null;
+  phone: string | null;
+  notes: string | null;
+  /** When the registration came in – defines the waitlist order */
+  created_at: string;
+  /** All active persons for this registration with individual check-in state */
+  persons: RegistrationPerson[];
+}
+
 export interface CheckinStatusResponse {
   total: number;
   checked_in: number;
@@ -237,6 +256,11 @@ export interface CheckinStatusResponse {
   walk_in_registrations: number;
   walk_in_guests: number;
   participants: CheckinParticipant[];
+  /** Pending registrations for this event, oldest first */
+  waitlist: WaitlistEntry[];
+  waitlist_registrations: number;
+  /** Total persons across all waitlist registrations */
+  waitlist_persons: number;
 }
 
 /** Event summary as delivered by /api/admin/checkin/events */
