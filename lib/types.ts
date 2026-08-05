@@ -239,6 +239,29 @@ export interface CheckinStatusResponse {
   participants: CheckinParticipant[];
 }
 
+/** Event summary as delivered by /api/admin/checkin/events */
+export interface CheckinEvent {
+  id: number;
+  title: string;
+  category: string;
+  date: string;
+  time: string;
+  location: string;
+  approved_count: number;
+  checked_in_count: number;
+  entry_price: number | null;
+  total_costs: number;
+  total_donations: number;
+  expected_revenue: number;
+  actual_revenue: number;
+}
+
+export interface CheckinEventsResponse {
+  today: CheckinEvent[];
+  upcoming: CheckinEvent[];
+  past: CheckinEvent[];
+}
+
 export interface AdminStats {
   total_events: number;
   upcoming_events: number;
