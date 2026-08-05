@@ -413,9 +413,9 @@ export default function ScannerPage() {
                       Alle ein
                     </span>
                   ) : (
-                    <span className="flex items-center gap-1 text-xs font-semibold text-amber-400 bg-amber-900/50 px-2.5 py-1 rounded-full">
+                    <span className="flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-amber-400 bg-amber-900/50 px-2.5 py-1 rounded-full">
                       <AlertTriangle className="w-3.5 h-3.5" />
-                      Ausstehend
+                      Check-in offen
                     </span>
                   )}
                 </div>
