@@ -552,7 +552,7 @@ export default function CheckinDashboardPage() {
   const progressPct = data && data.total > 0 ? Math.round((data.checked_in / data.total) * 100) : 0;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-0 space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
