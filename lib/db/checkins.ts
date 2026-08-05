@@ -1,6 +1,6 @@
 import { getSQL, isPostgresConfigured } from "./utils";
 import { findRegistration } from "./registrations";
-import type { CheckinParticipant, CheckinStatusResponse } from "../types";
+import type { CheckinParticipant, CheckinStatusResponse, WaitlistEntry } from "../types";
 
 export interface CheckinEventRow {
   id: number;
@@ -227,6 +227,106 @@ export async function undoPersonCheckin(personId: string): Promise<{ registratio
   return { registrationId };
 }
 
+/** Load all active persons for a set of registrations, grouped by registration. */
+async function getPersonsByRegistration(
+  regIds: number[]
+): Promise<Map<number, import("../types").RegistrationPerson[]>> {
+  const personsByReg = new Map<number, import("../types").RegistrationPerson[]>();
+  if (regIds.length === 0) return personsByReg;
+
+  const sql = getSQL();
+  type PersonRow = import("../types").RegistrationPerson & { registration_id: number };
+  const personRows = await sql`
+    SELECT id::text AS id, registration_id, first_name, last_name, checked_in_at, cancelled_at, created_at
+    FROM registration_persons
+    WHERE registration_id = ANY(${regIds})
+      AND cancelled_at IS NULL
+    ORDER BY created_at ASC
+  ` as PersonRow[];
+
+  for (const p of personRows) {
+    if (!personsByReg.has(p.registration_id)) personsByReg.set(p.registration_id, []);
+    personsByReg.get(p.registration_id)!.push(p);
+  }
+  return personsByReg;
+}
+
+/**
+ * Waitlist = all registrations of an event that are still pending. Ordered by
+ * sign-up time so the team can confirm them first-come-first-served.
+ * Registrations whose persons have all been cancelled are skipped.
+ */
+export async function getEventWaitlist(eventId: number): Promise<WaitlistEntry[]> {
+  const sql = getSQL();
+  const rows = await sql`
+    SELECT
+      r.id, r.email, r.phone, r.notes, r.created_at,
+      COALESCE((SELECT rp.first_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS first_name,
+      COALESCE((SELECT rp.last_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS last_name
+    FROM registrations r
+    WHERE r.event_id = ${eventId}
+      AND r.status = 'pending'
+      AND EXISTS (
+        SELECT 1 FROM registration_persons rp
+        WHERE rp.registration_id = r.id AND rp.cancelled_at IS NULL
+      )
+    ORDER BY r.created_at ASC
+  `;
+
+  const entriesBase = rows as Omit<WaitlistEntry, "persons">[];
+  const personsByReg = await getPersonsByRegistration(entriesBase.map((r) => r.id));
+
+  return entriesBase.map((r) => ({ ...r, persons: personsByReg.get(r.id) ?? [] }));
+}
+
+/**
+ * Approve a pending registration. Returns true only when this call performed
+ * the transition, so the caller sends the approval email exactly once even if
+ * two admins tap "Bestätigen" at the same time.
+ */
+export async function approvePendingRegistration(registrationId: number): Promise<boolean> {
+  const sql = getSQL();
+  const rows = await sql`
+    UPDATE registrations
+    SET status = 'approved', status_changed_at = NOW()
+    WHERE id = ${registrationId} AND status = 'pending'
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
+/**
+ * Check in specific persons of a registration. Person IDs are constrained to
+ * the given registration, so a stale client can never check in someone else.
+ * Returns the number of persons newly checked in.
+ */
+export async function checkinPersonsForRegistration(
+  registrationId: number,
+  personIds: string[],
+  checkedInBy: string
+): Promise<number> {
+  if (personIds.length === 0) return 0;
+
+  const sql = getSQL();
+  const rows = await sql`
+    UPDATE registration_persons
+    SET checked_in_at = NOW()
+    WHERE registration_id = ${registrationId}
+      AND id = ANY(${personIds}::uuid[])
+      AND cancelled_at IS NULL
+      AND checked_in_at IS NULL
+    RETURNING id
+  `;
+
+  if (rows.length > 0) {
+    await sql`
+      UPDATE registrations SET checked_in_at = NOW(), checked_in_by = ${checkedInBy}
+      WHERE id = ${registrationId} AND checked_in_at IS NULL
+    `;
+  }
+  return rows.length;
+}
+
 export async function getCheckinStatus(eventId: number): Promise<CheckinStatusResponse> {
   const sql = getSQL();
   const rows = await sql`
@@ -245,24 +345,10 @@ export async function getCheckinStatus(eventId: number): Promise<CheckinStatusRe
   const participantsBase = rows as Omit<CheckinParticipant, "persons">[];
 
   // Fetch all persons for these registrations in one query
-  const regIds = participantsBase.map((r) => r.id);
-  type PersonRow = import("../types").RegistrationPerson & { registration_id: number };
-  let personRows: PersonRow[] = [];
-  if (regIds.length > 0) {
-    personRows = await sql`
-      SELECT id::text AS id, registration_id, first_name, last_name, checked_in_at, cancelled_at, created_at
-      FROM registration_persons
-      WHERE registration_id = ANY(${regIds})
-        AND cancelled_at IS NULL
-      ORDER BY created_at ASC
-    ` as PersonRow[];
-  }
-
-  const personsByReg = new Map<number, import("../types").RegistrationPerson[]>();
-  for (const p of personRows) {
-    if (!personsByReg.has(p.registration_id)) personsByReg.set(p.registration_id, []);
-    personsByReg.get(p.registration_id)!.push(p);
-  }
+  const [personsByReg, waitlist] = await Promise.all([
+    getPersonsByRegistration(participantsBase.map((r) => r.id)),
+    getEventWaitlist(eventId),
+  ]);
 
   const participants: CheckinParticipant[] = participantsBase.map((r) => ({
     ...r,
@@ -290,6 +376,9 @@ export async function getCheckinStatus(eventId: number): Promise<CheckinStatusRe
     walk_in_registrations: walkInRegistrations,
     walk_in_guests: walkInGuests,
     participants,
+    waitlist,
+    waitlist_registrations: waitlist.length,
+    waitlist_persons: waitlist.reduce((sum, w) => sum + w.persons.length, 0),
   };
 }
 
