@@ -721,9 +721,14 @@ export default function CheckinDashboardPage() {
           </div>
 
           {/* ── Tab bar ── */}
+          {/* w-0 min-w-full: der Admin-Container (AdminMain) nutzt min-w-min, wodurch
+              die Tab-Leiste sonst auf ihre volle Inhaltsbreite aufgezogen wird und
+              statt ihrer der ganze Inhaltsbereich horizontal scrollt. Mit Breite 0 +
+              min-width 100% traegt sie nichts zur min-content-Breite bei und scrollt
+              selbst. */}
           <div
             ref={tabBarRef}
-            className="flex gap-1 bg-gray-100 rounded-xl p-1 overflow-x-auto scrollbar-hide snap-x snap-mandatory"
+            className="w-0 min-w-full flex gap-1 bg-gray-100 rounded-xl p-1 overflow-x-auto scrollbar-hide snap-x snap-mandatory"
           >
             {(
               [
