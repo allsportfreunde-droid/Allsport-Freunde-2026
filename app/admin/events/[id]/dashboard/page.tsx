@@ -28,6 +28,9 @@ import {
   Banknote,
   Euro,
   Hourglass,
+  ChevronDown,
+  Smartphone,
+  PenLine,
 } from "lucide-react";
 import RegistrationDetailButton from "@/components/RegistrationDetailButton";
 import { LastNameInput } from "@/components/ui/LastNameInput";
@@ -118,6 +121,8 @@ export default function CheckinDashboardPage() {
   const [donationLoading, setDonationLoading] = useState(false);
   const [donationError, setDonationError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const addMenuRef = useRef<HTMLDivElement>(null);
   const [deletingDonationId, setDeletingDonationId] = useState<number | null>(null);
   const donorNameRef = useRef<HTMLInputElement>(null);
 
@@ -230,6 +235,23 @@ export default function CheckinDashboardPage() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [dropdownOpen]);
+
+  // Close "Teilnehmer anmelden" menu on outside click / Escape
+  useEffect(() => {
+    if (!addOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!addMenuRef.current?.contains(event.target as Node)) setAddOpen(false);
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAddOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [addOpen]);
 
   function openWalkIn() {
     setWalkInForm(EMPTY_FORM);
@@ -569,23 +591,55 @@ export default function CheckinDashboardPage() {
             Scanner öffnen
           </button>
 
-          {/* Sekundär + Tertiär: 3-col grid on mobile, flex row on desktop */}
-          <div className="grid grid-cols-3 gap-2 sm:flex sm:gap-2">
-            <button
-              onClick={handleShowQR}
-              className="flex items-center justify-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-sm font-medium transition-colors"
-            >
-              <QrCode className="w-4 h-4" />
-              <span className="hidden sm:inline">Walk-in </span>QR
-            </button>
-            <button
-              onClick={openWalkIn}
-              className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
-            >
-              <UserPlus className="w-4 h-4" />
-              <span className="hidden sm:inline">Teilnehmer hinzufügen</span>
-              <span className="sm:hidden">+Teilnehmer</span>
-            </button>
+          {/* Sekundär + Tertiär: 2-col grid on mobile, flex row on desktop */}
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-2">
+            {/* Sekundär: Teilnehmer anmelden (QR oder manuell) */}
+            <div className="relative" ref={addMenuRef}>
+              <button
+                onClick={() => setAddOpen((o) => !o)}
+                aria-haspopup="menu"
+                aria-expanded={addOpen}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span className="hidden sm:inline">Teilnehmer anmelden</span>
+                <span className="sm:hidden">Anmelden</span>
+                <ChevronDown className={`w-4 h-4 transition-transform ${addOpen ? "rotate-180" : ""}`} />
+              </button>
+              {addOpen && (
+                <div
+                  role="menu"
+                  className="absolute left-0 sm:left-auto sm:right-0 mt-1 w-72 max-w-[calc(100vw-3rem)] bg-white border border-gray-200 rounded-lg shadow-lg z-20 overflow-hidden"
+                >
+                  <button
+                    role="menuitem"
+                    onClick={() => { setAddOpen(false); handleShowQR(); }}
+                    className="flex items-start gap-3 w-full px-3 py-3 text-left hover:bg-gray-50 transition-colors"
+                  >
+                    <Smartphone className="w-4 h-4 mt-0.5 shrink-0 text-violet-600" />
+                    <span>
+                      <span className="block text-sm font-medium text-gray-900">QR-Code anzeigen</span>
+                      <span className="block text-xs text-gray-500 mt-0.5">
+                        Teilnehmer melden sich selbst am Handy an
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => { setAddOpen(false); openWalkIn(); }}
+                    className="flex items-start gap-3 w-full px-3 py-3 text-left hover:bg-gray-50 border-t border-gray-100 transition-colors"
+                  >
+                    <PenLine className="w-4 h-4 mt-0.5 shrink-0 text-blue-600" />
+                    <span>
+                      <span className="block text-sm font-medium text-gray-900">Selbst eintragen</span>
+                      <span className="block text-xs text-gray-500 mt-0.5">
+                        Daten des Teilnehmers hier vor Ort erfassen
+                      </span>
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Tertiär: Dropdown für Mehr */}
             <div className="relative">

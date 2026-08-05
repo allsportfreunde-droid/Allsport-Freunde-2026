@@ -413,10 +413,15 @@ export async function createWalkInRegistration(data: {
   `;
   const registrationId = (rows[0] as { id: number }).id;
 
+  // Wird der Walk-in vom Check-In-Dashboard angelegt (checked_in_by gesetzt),
+  // gelten alle Personen sofort als eingecheckt – nicht nur die Anmeldung.
   for (const person of data.persons) {
     await sql`
-      INSERT INTO registration_persons (registration_id, first_name, last_name)
-      VALUES (${registrationId}, ${person.firstName}, ${person.lastName})
+      INSERT INTO registration_persons (registration_id, first_name, last_name, checked_in_at)
+      VALUES (
+        ${registrationId}, ${person.firstName}, ${person.lastName},
+        ${data.checked_in_by ? sql`NOW()` : sql`NULL`}
+      )
     `;
   }
 

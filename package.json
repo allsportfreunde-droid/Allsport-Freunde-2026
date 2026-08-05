@@ -20,7 +20,8 @@
     "db:migrate-cash-count": "npx tsx scripts/migrate-cash-count.ts",
     "db:migrate-survey": "npx tsx scripts/migrate-survey.ts",
     "db:migrate-drop-admin-users": "npx tsx scripts/migrate-drop-admin-users.ts",
-    "db:backfill-qr-codes": "npx tsx scripts/backfill-qr-codes.ts"
+    "db:backfill-qr-codes": "npx tsx scripts/backfill-qr-codes.ts",
+    "db:backfill-person-checkins": "npx tsx scripts/backfill-person-checkins.ts"
   },
   "keywords": [],
   "author": "",
