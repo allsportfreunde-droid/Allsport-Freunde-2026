@@ -27,10 +27,17 @@ import {
   AlertTriangle,
   Banknote,
   Euro,
+  Hourglass,
 } from "lucide-react";
 import RegistrationDetailButton from "@/components/RegistrationDetailButton";
 import { LastNameInput } from "@/components/ui/LastNameInput";
-import type { CheckinParticipant, CheckinStatusResponse, EventFinancials, EventDonation } from "@/lib/types";
+import type {
+  CheckinParticipant,
+  CheckinStatusResponse,
+  EventFinancials,
+  EventDonation,
+  WaitlistEntry,
+} from "@/lib/types";
 import { formatEuro } from "@/lib/finance";
 
 function formatTime(iso: string | null) {
@@ -117,8 +124,13 @@ export default function CheckinDashboardPage() {
   // Person-detail overlay (lifted here so data refreshes don't close it)
   const [overlayParticipantId, setOverlayParticipantId] = useState<number | null>(null);
 
+  // Waitlist state
+  const [waitlistRegLoadingId, setWaitlistRegLoadingId] = useState<number | null>(null);
+  const [waitlistPersonLoadingId, setWaitlistPersonLoadingId] = useState<string | null>(null);
+  const [waitlistError, setWaitlistError] = useState<string | null>(null);
+
   // Tab state
-  type Tab = "anmeldungen" | "finanzen" | "spenden";
+  type Tab = "anmeldungen" | "warteliste" | "finanzen" | "spenden";
   const [activeTab, setActiveTab] = useState<Tab>("anmeldungen");
 
   const fetchStatus = useCallback(async () => {
@@ -387,6 +399,36 @@ export default function CheckinDashboardPage() {
     }
   }
 
+  /**
+   * Confirms a waitlist entry. Without options the registration is only
+   * approved (the guest gets the approval email + QR code); with personIds or
+   * checkinAll the selected persons are checked in right away.
+   */
+  async function handleWaitlistConfirm(
+    registrationId: number,
+    options: { personIds?: string[]; checkinAll?: boolean } = {}
+  ) {
+    const personId = options.personIds?.length === 1 ? options.personIds[0] : null;
+    if (personId) setWaitlistPersonLoadingId(personId);
+    else setWaitlistRegLoadingId(registrationId);
+    setWaitlistError(null);
+    try {
+      const res = await fetch("/api/checkin/waitlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ registrationId, ...options }),
+      });
+      const body = await res.json();
+      if (!res.ok) setWaitlistError(body.error ?? "Fehler beim Bestätigen.");
+      else await fetchStatus();
+    } catch {
+      setWaitlistError("Netzwerkfehler.");
+    } finally {
+      setWaitlistPersonLoadingId(null);
+      setWaitlistRegLoadingId(null);
+    }
+  }
+
   async function handleUndo(participantId: number) {
     setUndoId(participantId);
     setError(null);
@@ -488,6 +530,18 @@ export default function CheckinDashboardPage() {
       p.first_name.toLowerCase().includes(q) ||
       p.last_name.toLowerCase().includes(q) ||
       (p.email?.toLowerCase().includes(q) ?? false)
+    );
+  });
+
+  const waitlist = data?.waitlist ?? [];
+  const waitlistFiltered = waitlist.filter((w: WaitlistEntry) => {
+    const q = search.toLowerCase();
+    return (
+      w.persons.some((p) =>
+        `${p.first_name} ${p.last_name}`.toLowerCase().includes(q)
+      ) ||
+      `${w.first_name} ${w.last_name}`.toLowerCase().includes(q) ||
+      (w.email?.toLowerCase().includes(q) ?? false)
     );
   });
 
@@ -635,6 +689,11 @@ export default function CheckinDashboardPage() {
             <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">
               🚶 {data.walk_in_registrations} Walk-ins{data.walk_in_guests > 0 ? ` (+ ${data.walk_in_guests} Begleitpersonen)` : ""}
             </p>
+            {data.waitlist_registrations > 0 && (
+              <p className="text-xs text-amber-600 mt-0.5">
+                ⏳ {data.waitlist_registrations} Anmeldung{data.waitlist_registrations !== 1 ? "en" : ""} auf der Warteliste ({data.waitlist_persons} Person{data.waitlist_persons !== 1 ? "en" : ""})
+              </p>
+            )}
           </div>
 
           {/* ── Tab bar ── */}
@@ -647,6 +706,13 @@ export default function CheckinDashboardPage() {
                   icon: <Users className="w-4 h-4" />,
                   badge: data.missing > 0 ? String(data.missing) : null,
                   badgeColor: "bg-amber-500",
+                },
+                {
+                  key: "warteliste" as const,
+                  label: "Warteliste",
+                  icon: <Hourglass className="w-4 h-4" />,
+                  badge: data.waitlist_persons > 0 ? String(data.waitlist_persons) : null,
+                  badgeColor: "bg-amber-600",
                 },
                 {
                   key: "finanzen" as const,
@@ -676,7 +742,13 @@ export default function CheckinDashboardPage() {
                 {tab.icon}
                 <span className="hidden sm:inline">{tab.label}</span>
                 <span className="sm:hidden">
-                  {tab.key === "anmeldungen" ? "Liste" : tab.key === "finanzen" ? "Finanzen" : "Spenden"}
+                  {tab.key === "anmeldungen"
+                    ? "Liste"
+                    : tab.key === "warteliste"
+                      ? "Warten"
+                      : tab.key === "finanzen"
+                        ? "Finanzen"
+                        : "Spenden"}
                 </span>
                 {tab.badge && (
                   <span className={`${tab.badgeColor} text-white text-xs rounded-full min-w-[1.25rem] h-5 px-1 flex items-center justify-center font-bold leading-none`}>
@@ -755,6 +827,59 @@ export default function CheckinDashboardPage() {
                     {search
                       ? "Keine Teilnehmer gefunden."
                       : "Noch keine Teilnehmer – Teilnehmer können manuell oder per Walk-in hinzugefügt werden."}
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* ── Tab: Warteliste ── */}
+          {activeTab === "warteliste" && (
+            <>
+              <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
+                <p className="text-sm text-amber-900 font-medium flex items-center gap-2">
+                  <Hourglass className="w-4 h-4 shrink-0" />
+                  Warteliste – noch nicht bestätigte Anmeldungen
+                </p>
+                <p className="text-xs text-amber-700 mt-1">
+                  Diese Anmeldungen sind eingegangen, als das Event bereits ausgebucht war.
+                  Nach dem Bestätigen erhalten sie automatisch die Bestätigungs-E-Mail mit
+                  QR-Code und erscheinen im Tab „Anmeldungen“.
+                </p>
+              </div>
+
+              {/* Search */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Name oder E-Mail suchen…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                />
+              </div>
+
+              {waitlistError && (
+                <p className="text-sm text-red-600 bg-red-50 rounded-lg px-4 py-2">{waitlistError}</p>
+              )}
+
+              <div className="space-y-2">
+                {waitlistFiltered.map((entry) => (
+                  <WaitlistRow
+                    key={entry.id}
+                    entry={entry}
+                    position={waitlist.indexOf(entry) + 1}
+                    onConfirm={handleWaitlistConfirm}
+                    regLoadingId={waitlistRegLoadingId}
+                    personLoadingId={waitlistPersonLoadingId}
+                  />
+                ))}
+                {waitlistFiltered.length === 0 && (
+                  <p className="text-center text-gray-400 py-10 text-sm">
+                    {search
+                      ? "Keine Wartelisten-Einträge gefunden."
+                      : "Niemand auf der Warteliste – alle Anmeldungen sind bearbeitet."}
                   </p>
                 )}
               </div>
@@ -1657,6 +1782,126 @@ function ParticipantRow({
                   ) : (
                     <UserCheck className="w-3 h-3" />
                   )}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatWaitingSince(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) +
+    ", " + d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * One pending registration on the waitlist. Single-person sign-ups get the two
+ * top-level actions; for groups every name is listed with its own check-in
+ * button so a guest who shows up alone can be let in without their companions.
+ */
+function WaitlistRow({
+  entry,
+  position,
+  onConfirm,
+  regLoadingId,
+  personLoadingId,
+}: {
+  entry: WaitlistEntry;
+  position: number;
+  onConfirm: (
+    registrationId: number,
+    options?: { personIds?: string[]; checkinAll?: boolean }
+  ) => void;
+  regLoadingId: number | null;
+  personLoadingId: string | null;
+}) {
+  const persons = entry.persons ?? [];
+  const multi = persons.length > 1;
+  const regBusy = regLoadingId === entry.id;
+  const anyBusy = regBusy || persons.some((p) => personLoadingId === p.id);
+  const subtitle = entry.email ?? entry.phone ?? "–";
+
+  return (
+    <div className="rounded-xl border border-amber-100 bg-white">
+      {/* Registration header row */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold bg-amber-100 text-amber-700">
+            {position}
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-900 truncate flex items-center gap-1.5">
+              {entry.first_name} {entry.last_name}
+              {multi && (
+                <span className="text-xs text-gray-400">+{persons.length - 1}</span>
+              )}
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 leading-none">
+                Warteliste
+              </span>
+            </p>
+            <p className="text-xs text-gray-400 truncate">{subtitle}</p>
+            <p className="text-xs text-gray-400 truncate">
+              {persons.length} Person{persons.length !== 1 ? "en" : ""} · seit {formatWaitingSince(entry.created_at)}
+            </p>
+            {entry.notes && (
+              <p className="text-xs text-gray-400 truncate italic">{entry.notes}</p>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <RegistrationDetailButton registrationId={entry.id} />
+          <button
+            onClick={() => onConfirm(entry.id)}
+            disabled={anyBusy}
+            title="Nur bestätigen (ohne Check-In)"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-gray-200 hover:border-green-300 hover:bg-green-50 hover:text-green-700 text-gray-600 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {regBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <BadgeCheck className="w-3.5 h-3.5" />}
+            Bestätigen
+          </button>
+          <button
+            onClick={() => onConfirm(entry.id, { checkinAll: true })}
+            disabled={anyBusy}
+            title={multi ? "Alle bestätigen und einchecken" : "Bestätigen und einchecken"}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:opacity-50"
+          >
+            <UserCheck className="w-3.5 h-3.5" />
+            {multi ? "Alle einchecken" : "Einchecken"}
+          </button>
+        </div>
+      </div>
+
+      {/* Per-person rows (only when multiple persons) */}
+      {multi && (
+        <div className="border-t border-amber-100 divide-y divide-gray-50">
+          {persons.map((person) => {
+            const personChecked = person.checked_in_at !== null;
+            const personBusy = personLoadingId === person.id;
+            return (
+              <div key={person.id} className="flex items-center justify-between px-4 py-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${personChecked ? "bg-green-500" : "bg-amber-400"}`} />
+                  <span className="text-xs truncate text-gray-700">
+                    {person.first_name} {person.last_name}
+                  </span>
+                </div>
+                <button
+                  onClick={() => onConfirm(entry.id, { personIds: [person.id] })}
+                  disabled={anyBusy}
+                  title="Diese Person bestätigen und einchecken"
+                  className="shrink-0 flex items-center gap-1 px-2 py-1 text-xs text-gray-600 rounded-lg border border-gray-200 hover:border-green-300 hover:text-green-700 hover:bg-green-50 transition-colors disabled:opacity-50"
+                >
+                  {personBusy ? (
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <UserCheck className="w-3 h-3" />
+                  )}
+                  Einchecken
                 </button>
               </div>
             );
