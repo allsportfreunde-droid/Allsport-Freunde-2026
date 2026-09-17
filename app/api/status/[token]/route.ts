@@ -1,4 +1,5 @@
 import { getRegistrationByToken } from "@/lib/db";
+import { getCheckoutDisplay } from "@/lib/checkout-status";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(
@@ -16,7 +17,8 @@ export async function GET(
       );
     }
 
-    return NextResponse.json(info);
+    const payment = await getCheckoutDisplay(info.id, info.paid_at);
+    return NextResponse.json({ ...info, ...payment }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Fehler beim Laden des Status:", error);
     return NextResponse.json(

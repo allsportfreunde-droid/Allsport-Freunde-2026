@@ -28,10 +28,13 @@ import {
   Banknote,
   Euro,
   Hourglass,
+  Mail,
   ChevronDown,
   Smartphone,
   PenLine,
 } from "lucide-react";
+import ChildBadge from "@/components/ChildBadge";
+import PaidBadge from "@/components/PaidBadge";
 import RegistrationDetailButton from "@/components/RegistrationDetailButton";
 import { LastNameInput } from "@/components/ui/LastNameInput";
 import type {
@@ -58,6 +61,8 @@ interface WalkInForm {
   email: string;
   phone: string;
   notes: string;
+  /** Schickt die Mail mit Betrag und Zahlungslink. Standard: an. */
+  sendEmail: boolean;
 }
 
 interface DonationForm {
@@ -79,6 +84,7 @@ const EMPTY_FORM: WalkInForm = {
   email: "",
   phone: "",
   notes: "",
+  sendEmail: true,
 };
 
 export default function CheckinDashboardPage() {
@@ -129,6 +135,20 @@ export default function CheckinDashboardPage() {
   // Person-detail overlay (lifted here so data refreshes don't close it)
   const [overlayParticipantId, setOverlayParticipantId] = useState<number | null>(null);
 
+  // ── Auto-Refresh ──────────────────────────────────────────────────────────
+  /** Nummer der neuesten Abfrage – ältere Antworten werden verworfen. */
+  const latestFetch = useRef(0);
+  /** true, solange eine Aktion des Teams läuft; dann pausiert der Takt. */
+  const actionBusy = useRef(false);
+  /**
+   * Anmeldungen, die beim letzten Stand schon bezahlt waren. null = noch kein
+   * Stand geladen; beim ersten Laden wird deshalb nichts hervorgehoben.
+   */
+  const paidBefore = useRef<Set<number> | null>(null);
+  /** Gerade eingetroffene Zahlungen – kurz hervorgehoben. */
+  const [justPaid, setJustPaid] = useState<Set<number>>(new Set());
+  const justPaidTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
   // Waitlist state
   const [waitlistRegLoadingId, setWaitlistRegLoadingId] = useState<number | null>(null);
   const [waitlistPersonLoadingId, setWaitlistPersonLoadingId] = useState<string | null>(null);
@@ -162,17 +182,66 @@ export default function CheckinDashboardPage() {
     container.scrollTo({ left: target, behavior: "smooth" });
   }, [activeTab]);
 
+  /**
+   * Merkt sich, welche Anmeldungen zwischen zwei Abfragen bezahlt wurden.
+   *
+   * Genau darum läuft der Takt: am Eingang zahlt jemand per Handy, und das
+   * Team soll es an der Zeile sehen, ohne selbst neu zu laden. Die Markierung
+   * bleibt eine halbe Minute stehen – lang genug, um sie auch zu bemerken,
+   * wenn man zwischendurch woanders hingesehen hat.
+   */
+  const markNewPayments = useCallback((next: CheckinStatusResponse) => {
+    const paidNow = new Set(
+      (next.participants ?? []).filter((p) => p.paid_at).map((p) => p.id)
+    );
+    const before = paidBefore.current;
+    paidBefore.current = paidNow;
+    if (!before) return; // erster Stand – es ist nichts "neu"
+
+    const fresh = [...paidNow].filter((id) => !before.has(id));
+    if (fresh.length === 0) return;
+
+    setJustPaid((prev) => new Set([...prev, ...fresh]));
+    const timer = setTimeout(() => {
+      setJustPaid((prev) => {
+        const rest = new Set(prev);
+        for (const id of fresh) rest.delete(id);
+        return rest;
+      });
+    }, 30_000);
+    justPaidTimers.current.push(timer);
+  }, []);
+
+  // Offene Timer beim Verlassen der Seite aufräumen
+  useEffect(
+    () => () => {
+      for (const timer of justPaidTimers.current) clearTimeout(timer);
+    },
+    []
+  );
+
   const fetchStatus = useCallback(async () => {
+    // Jede Abfrage bekommt eine Nummer. Trifft die Antwort einer älteren
+    // Abfrage später ein als die einer neueren, wird sie verworfen – sonst
+    // könnte ein Zehn-Sekunden-Takt, der vor einem Check-In gestartet ist,
+    // die frische Liste danach wieder auf den alten Stand ziehen.
+    const seq = ++latestFetch.current;
     try {
       const [statusRes, finRes] = await Promise.allSettled([
         fetch(`/api/checkin/status/${eventId}`),
         fetch(`/api/admin/events/${eventId}/finances`),
       ]);
+      if (seq !== latestFetch.current) return;
       if (statusRes.status === "fulfilled" && statusRes.value.ok) {
-        setData(await statusRes.value.json());
+        const next = (await statusRes.value.json()) as CheckinStatusResponse;
+        if (seq !== latestFetch.current) return;
+        markNewPayments(next);
+        setData(next);
       }
       if (finRes.status === "fulfilled" && finRes.value.ok) {
-        setFinancials(await finRes.value.json());
+        const nextFin = await finRes.value.json();
+        if (seq !== latestFetch.current) return;
+        setFinancials(nextFin);
       } else if (finRes.status === "fulfilled" && !finRes.value.ok) {
         // API reachable but returned error – show empty financials so section appears
         setFinancials({
@@ -198,14 +267,59 @@ export default function CheckinDashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [eventId]);
+  }, [eventId, markNewPayments]);
 
-  // Initial fetch + auto-refresh every 10 seconds
+  /**
+   * Der Zehn-Sekunden-Takt – er ist dafür da, dass eingegangene Zahlungen von
+   * allein in der Liste auftauchen.
+   *
+   * Zwei Fälle werden übersprungen, damit er niemandem in die Arbeit fährt:
+   * während eine Aktion des Teams läuft (die holt sich die Liste selbst,
+   * sobald sie durch ist) und solange die Seite im Hintergrund liegt – ein
+   * Handy in der Tasche braucht keine Abfragen. Kommt sie wieder nach vorn,
+   * wird sofort aktualisiert statt bis zum nächsten Takt zu warten.
+   */
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 10_000);
-    return () => clearInterval(interval);
+
+    const tick = () => {
+      if (document.visibilityState === "hidden") return;
+      if (actionBusy.current) return;
+      fetchStatus();
+    };
+    const interval = setInterval(tick, 10_000);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && !actionBusy.current) fetchStatus();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [fetchStatus]);
+
+  /**
+   * Läuft gerade eine Aktion des Teams? Dann hält der Takt still.
+   *
+   * Der Grund ist nicht die Anzeige, sondern die Reihenfolge: jede Aktion holt
+   * sich die Liste selbst, sobald der Server bestätigt hat. Ein Takt, der
+   * mitten hinein fällt, liefert den Stand von vorher.
+   */
+  const busy =
+    manualCheckinId !== null ||
+    undoId !== null ||
+    personLoadingId !== null ||
+    waitlistRegLoadingId !== null ||
+    waitlistPersonLoadingId !== null ||
+    deletingDonationId !== null ||
+    walkInLoading ||
+    donationLoading ||
+    cashSaving;
+  useEffect(() => {
+    actionBusy.current = busy;
+  }, [busy]);
 
   // Focus first field when walk-in modal opens
   useEffect(() => {
@@ -399,6 +513,7 @@ export default function CheckinDashboardPage() {
           email: walkInForm.email,
           phone: walkInForm.phone || undefined,
           notes: walkInForm.notes || undefined,
+          sendEmail: walkInForm.sendEmail,
         }),
       });
       const body = await res.json();
@@ -471,6 +586,29 @@ export default function CheckinDashboardPage() {
       setWaitlistError("Netzwerkfehler.");
     } finally {
       setWaitlistPersonLoadingId(null);
+      setWaitlistRegLoadingId(null);
+    }
+  }
+
+  /**
+   * Bietet einer Wartelisten-Anmeldung einen frei gewordenen Platz an. Die
+   * Anmeldung bleibt offen – sie wird nur zahlbar und bekommt eine E-Mail.
+   */
+  async function handleWaitlistOffer(registrationId: number) {
+    setWaitlistRegLoadingId(registrationId);
+    setWaitlistError(null);
+    try {
+      const res = await fetch("/api/checkin/waitlist/offer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ registrationId }),
+      });
+      const body = await res.json();
+      if (!res.ok) setWaitlistError(body.error ?? "Fehler beim Anbieten des Platzes.");
+      else await fetchStatus();
+    } catch {
+      setWaitlistError("Netzwerkfehler.");
+    } finally {
       setWaitlistRegLoadingId(null);
     }
   }
@@ -886,6 +1024,7 @@ export default function CheckinDashboardPage() {
                         onPersonUndo={handlePersonUndo}
                         personLoadingId={personLoadingId}
                         onOpenOverlay={setOverlayParticipantId}
+                        paymentJustArrived={justPaid.has(p.id)}
                       />
                     ))}
                   </>
@@ -907,6 +1046,7 @@ export default function CheckinDashboardPage() {
                         onPersonUndo={handlePersonUndo}
                         personLoadingId={personLoadingId}
                         onOpenOverlay={setOverlayParticipantId}
+                        paymentJustArrived={justPaid.has(p.id)}
                       />
                     ))}
                   </>
@@ -932,8 +1072,9 @@ export default function CheckinDashboardPage() {
                 </p>
                 <p className="text-xs text-amber-700 mt-1">
                   Diese Anmeldungen sind eingegangen, als das Event bereits ausgebucht war.
-                  Nach dem Bestätigen erhalten sie automatisch die Bestätigungs-E-Mail mit
-                  QR-Code und erscheinen im Tab „Anmeldungen“.
+                  Wird ein Platz frei, biete ihn mit „Platz anbieten“ an: die Anmeldung
+                  kann dann bezahlen und bekommt eine E-Mail. „Bestätigen“ überspringt die
+                  Zahlung und schickt direkt die Bestätigung mit QR-Code.
                 </p>
               </div>
 
@@ -960,6 +1101,7 @@ export default function CheckinDashboardPage() {
                     entry={entry}
                     position={waitlist.indexOf(entry) + 1}
                     onConfirm={handleWaitlistConfirm}
+                    onOffer={handleWaitlistOffer}
                     regLoadingId={waitlistRegLoadingId}
                     personLoadingId={waitlistPersonLoadingId}
                   />
@@ -994,12 +1136,12 @@ export default function CheckinDashboardPage() {
                       </div>
 
                       {/* Erwarteter Umsatz */}
-                      {financials.entry_price != null && financials.entry_price > 0 ? (
+                      {financials.entry_price != null || financials.child_entry_price != null || financials.expected_revenue > 0 || financials.actual_revenue > 0 ? (
                         <div className="bg-blue-50 rounded-lg p-3 space-y-1">
                           <p className="text-xs text-blue-700">Erw. Umsatz</p>
                           <p className="text-base font-bold text-blue-900">{formatEuro(financials.expected_revenue)}</p>
                           <p className="text-xs text-blue-600">
-                            ({financials.approved_persons} Anm.{financials.approved_guests > 0 ? ` + ${financials.approved_guests} Bgl.` : ""}) × {formatEuro(financials.entry_price)}
+                            {financials.approved_persons} bestätigte Personen · jeweiliger Eintrittspreis
                           </p>
                         </div>
                       ) : (
@@ -1010,7 +1152,7 @@ export default function CheckinDashboardPage() {
                       )}
 
                       {/* Tatsächlicher Umsatz */}
-                      {financials.entry_price != null && financials.entry_price > 0 ? (
+                      {financials.entry_price != null || financials.child_entry_price != null || financials.expected_revenue > 0 || financials.actual_revenue > 0 ? (
                         <div className="bg-green-50 rounded-lg p-3 space-y-1">
                           <p className="text-xs text-green-700">Tats. Umsatz</p>
                           {financials.cash_counted != null ? (
@@ -1024,7 +1166,7 @@ export default function CheckinDashboardPage() {
                           <p className="text-xs text-green-600">
                             {financials.cash_counted != null
                               ? "Kassenabschluss"
-                              : <>({financials.checkedin_persons} eingecheckt{financials.checkedin_guests > 0 ? ` + ${financials.checkedin_guests} Bgl.` : ""}) × {formatEuro(financials.entry_price)}</>}
+                              : <>{financials.checkedin_persons} eingecheckte Personen · jeweiliger Eintrittspreis</>}
                           </p>
                         </div>
                       ) : (
@@ -1045,7 +1187,7 @@ export default function CheckinDashboardPage() {
                       </div>
 
                       {/* Bilanz */}
-                      {(financials.entry_price != null && financials.entry_price > 0) || (financials.total_donations ?? 0) > 0 || financials.total_costs > 0 ? (
+                      {(financials.entry_price != null || financials.child_entry_price != null || financials.expected_revenue > 0 || financials.actual_revenue > 0) || (financials.total_donations ?? 0) > 0 || financials.total_costs > 0 ? (
                         <div className={`rounded-lg p-3 space-y-1 ${financials.balance > 0 ? "bg-green-100" : financials.balance < 0 ? "bg-red-100" : "bg-gray-50"}`}>
                           <p className={`text-xs ${financials.balance > 0 ? "text-green-700" : financials.balance < 0 ? "text-red-700" : "text-gray-500"}`}>Bilanz</p>
                           <p className={`text-base font-bold ${financials.balance > 0 ? "text-green-800" : financials.balance < 0 ? "text-red-800" : "text-gray-700"}`}>
@@ -1363,6 +1505,24 @@ export default function CheckinDashboardPage() {
                 />
               </div>
 
+              {/* Zahlungs-Mail */}
+              <label className="flex items-start gap-2.5 cursor-pointer rounded-lg border border-gray-200 px-3 py-2.5 hover:bg-gray-50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={walkInForm.sendEmail}
+                  onChange={(e) => setWalkInForm((f) => ({ ...f, sendEmail: e.target.checked }))}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                />
+                <span className="text-xs text-gray-700">
+                  <span className="font-medium">E-Mail mit Zahlungslink senden</span>
+                  <span className="block text-gray-500 mt-0.5">
+                    {walkInForm.sendEmail
+                      ? "Nennt den Teilnahmebetrag und führt auf die Status-Seite. Es wird noch niemand eingecheckt – das macht ihr, sobald bezahlt wurde."
+                      : "Ohne Mail gilt der Walk-in als vor Ort bezahlt und wird sofort eingecheckt."}
+                  </span>
+                </span>
+              </label>
+
               {walkInError && (
                 <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{walkInError}</p>
               )}
@@ -1386,7 +1546,9 @@ export default function CheckinDashboardPage() {
                   ) : (
                     <UserCheck className="w-4 h-4" />
                   )}
-                  {walkInForm.persons.length} {walkInForm.persons.length === 1 ? "Person" : "Personen"} einchecken
+                  {walkInForm.persons.length}{" "}
+                  {walkInForm.persons.length === 1 ? "Person" : "Personen"}{" "}
+                  {walkInForm.sendEmail ? "hinzufügen" : "einchecken"}
                 </button>
               </div>
             </form>
@@ -1660,6 +1822,7 @@ export default function CheckinDashboardPage() {
                       <span className={`text-sm font-medium truncate ${personChecked ? "text-green-900" : "text-gray-800"}`}>
                         {person.first_name} {person.last_name}
                       </span>
+                      {person.is_child && <ChildBadge className="shrink-0" />}
                       {personChecked && (
                         <span className="text-xs text-green-600 shrink-0">{formatTime(person.checked_in_at)}</span>
                       )}
@@ -1725,8 +1888,11 @@ function ParticipantRow({
   onPersonUndo,
   personLoadingId,
   onOpenOverlay,
+  paymentJustArrived = false,
 }: {
   participant: CheckinParticipant;
+  /** Zahlung kam gerade rein – die Markierung wird kurz betont. */
+  paymentJustArrived?: boolean;
   onManualCheckin: (id: number) => void;
   onUndo: (id: number) => void;
   loadingId: number | null;
@@ -1773,6 +1939,17 @@ function ParticipantRow({
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 leading-none">
                   Walk-in
                 </span>
+              )}
+              {/* Nur wenn es stimmt: keine Markierung heißt "noch offen".
+                  Bei kostenlosen Events zahlt niemand, dort bleibt die Zeile
+                  deshalb unverändert. */}
+              {participant.paid_at && (
+                <PaidBadge
+                  paid
+                  className={
+                    paymentJustArrived ? "ring-2 ring-green-400 ring-offset-1" : undefined
+                  }
+                />
               )}
             </p>
             <p className="text-xs text-gray-400 truncate">{subtitle}</p>
@@ -1847,6 +2024,7 @@ function ParticipantRow({
                   <span className={`text-xs truncate ${personChecked ? "text-green-800" : "text-gray-700"}`}>
                     {person.first_name} {person.last_name}
                   </span>
+                  {person.is_child && <ChildBadge className="shrink-0" />}
                   {personChecked && (
                     <span className="text-xs text-green-600 shrink-0">
                       {formatTime(person.checked_in_at)}
@@ -1896,6 +2074,7 @@ function WaitlistRow({
   entry,
   position,
   onConfirm,
+  onOffer,
   regLoadingId,
   personLoadingId,
 }: {
@@ -1905,6 +2084,7 @@ function WaitlistRow({
     registrationId: number,
     options?: { personIds?: string[]; checkinAll?: boolean }
   ) => void;
+  onOffer: (registrationId: number) => void;
   regLoadingId: number | null;
   personLoadingId: string | null;
 }) {
@@ -1928,9 +2108,15 @@ function WaitlistRow({
               {multi && (
                 <span className="text-xs text-gray-400">+{persons.length - 1}</span>
               )}
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 leading-none">
-                Warteliste
-              </span>
+              {entry.is_waitlist ? (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 leading-none">
+                  Warteliste
+                </span>
+              ) : (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 leading-none">
+                  Platz angeboten
+                </span>
+              )}
             </p>
             <p className="text-xs text-gray-400 truncate">{subtitle}</p>
             <p className="text-xs text-gray-400 truncate">
@@ -1944,6 +2130,21 @@ function WaitlistRow({
 
         <div className="flex items-center gap-2 shrink-0">
           <RegistrationDetailButton registrationId={entry.id} />
+          {entry.is_waitlist && (
+            <button
+              onClick={() => onOffer(entry.id)}
+              disabled={anyBusy}
+              title="Platz anbieten – die Anmeldung wird zahlbar und bekommt eine E-Mail"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-blue-200 hover:border-blue-300 hover:bg-blue-50 text-blue-700 rounded-lg transition-colors disabled:opacity-50"
+            >
+              {regBusy ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Mail className="w-3.5 h-3.5" />
+              )}
+              Platz anbieten
+            </button>
+          )}
           <button
             onClick={() => onConfirm(entry.id)}
             disabled={anyBusy}
@@ -1978,6 +2179,7 @@ function WaitlistRow({
                   <span className="text-xs truncate text-gray-700">
                     {person.first_name} {person.last_name}
                   </span>
+                  {person.is_child && <ChildBadge className="shrink-0" />}
                 </div>
                 <button
                   onClick={() => onConfirm(entry.id, { personIds: [person.id] })}

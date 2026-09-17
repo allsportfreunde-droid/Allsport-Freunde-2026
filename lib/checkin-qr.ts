@@ -1,5 +1,5 @@
 import { generateCheckinToken, generateQRCode } from "@/lib/checkin";
-import { saveQRCode } from "@/lib/db";
+import { saveQRCode, saveCheckoutQRCode } from "@/lib/db";
 
 /**
  * Generates a check-in QR code for an approved registration, persists it on
@@ -12,7 +12,8 @@ import { saveQRCode } from "@/lib/db";
  */
 export async function generateAndSaveCheckinQR(
   registrationId: number,
-  event: { id: number; date: string; time: string }
+  event: { id: number; date: string; time: string },
+  preserveExisting = false
 ): Promise<string | undefined> {
   try {
     const token = generateCheckinToken(
@@ -21,6 +22,7 @@ export async function generateAndSaveCheckinQR(
       event.time
     );
     const qrCode = await generateQRCode(token);
+    if (preserveExisting) return await saveCheckoutQRCode(registrationId, qrCode, token);
     await saveQRCode(registrationId, qrCode, token);
     return qrCode;
   } catch (err) {

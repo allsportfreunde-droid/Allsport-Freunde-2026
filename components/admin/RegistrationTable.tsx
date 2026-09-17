@@ -14,38 +14,89 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/components/ui/toast";
 import StatusBadge from "@/components/status/StatusBadge";
-import { Trash2, Loader2, Search, Download, CheckCircle2, XCircle, Clock } from "lucide-react";
+import ChildBadge from "@/components/ChildBadge";
+import { Trash2, Loader2, Search, Download, CheckCircle2, XCircle, Clock, Mail, X } from "lucide-react";
 import RegistrationDetailButton from "@/components/RegistrationDetailButton";
 import type { RegistrationWithEvent, RegistrationStatus } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 interface RegistrationTableProps {
   eventId?: number;
   upcomingOnly?: boolean;
+  /**
+   * Vorbelegung der Suche. Aus E-Mails kommt man mit einer Adresse im Link
+   * hierher – dann soll die gesuchte Anmeldung sofort dastehen und nicht
+   * zwischen hunderten gefunden werden müssen.
+   */
+  initialSearch?: string;
 }
 
 const PAGE_SIZE = 25;
 
-export default function RegistrationTable({ eventId, upcomingOnly = false }: RegistrationTableProps) {
+/** Was mit der aktuellen Auswahl passieren soll. */
+type BulkOp =
+  | { kind: "status"; status: RegistrationStatus }
+  | { kind: "offer" }
+  | { kind: "delete" };
+
+/** Nur Wartelisten-Anmeldungen kann man einen Platz anbieten. */
+const isOfferable = (r: RegistrationWithEvent) =>
+  r.status === "pending" && !!r.is_waitlist;
+
+export default function RegistrationTable({
+  eventId,
+  upcomingOnly = false,
+  initialSearch = "",
+}: RegistrationTableProps) {
   const today = new Date().toISOString().split("T")[0];
   const { toast } = useToast();
   const [registrations, setRegistrations] = useState<RegistrationWithEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearch);
   const [categoryFilter, setCategoryFilter] = useState("alle");
   const [statusFilter, setStatusFilter] = useState<string>("alle");
   const [page, setPage] = useState(1);
   const [deleteTarget, setDeleteTarget] = useState<RegistrationWithEvent | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [bulkAction, setBulkAction] = useState(false);
-  const [bulkStatus, setBulkStatus] = useState<RegistrationStatus>("approved");
+  const [lastClickedId, setLastClickedId] = useState<number | null>(null);
+  const [bulkOp, setBulkOp] = useState<BulkOp | null>(null);
   const [bulkNote, setBulkNote] = useState("");
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [statusTarget, setStatusTarget] = useState<{ reg: RegistrationWithEvent; status: RegistrationStatus } | null>(null);
   const [statusNote, setStatusNote] = useState("");
   const [statusProcessing, setStatusProcessing] = useState(false);
+  const [offeringId, setOfferingId] = useState<number | null>(null);
+
+  /**
+   * Bietet einer Wartelisten-Anmeldung einen frei gewordenen Platz an: das
+   * Wartelisten-Flag fällt weg, der Status bleibt ausstehend. Die Anmeldung
+   * wird damit zahlbar und bekommt eine E-Mail.
+   */
+  const handleOfferSpot = async (reg: RegistrationWithEvent) => {
+    setOfferingId(reg.id);
+    try {
+      const res = await fetch("/api/checkin/waitlist/offer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ registrationId: reg.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast(data.error ?? "Platz konnte nicht angeboten werden.", "error");
+        return;
+      }
+      toast("Platz angeboten – E-Mail ist unterwegs.", "success");
+      fetchRegistrations();
+    } catch {
+      toast("Netzwerkfehler.", "error");
+    } finally {
+      setOfferingId(null);
+    }
+  };
 
   const fetchRegistrations = () => {
     setLoading(true);
@@ -87,6 +138,18 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const selectedRegs = useMemo(
+    () => registrations.filter((r) => selectedIds.has(r.id)),
+    [registrations, selectedIds]
+  );
+  const offerableIds = useMemo(
+    () => selectedRegs.filter(isOfferable).map((r) => r.id),
+    [selectedRegs]
+  );
+  const pageSelectedCount = paginated.filter((r) => selectedIds.has(r.id)).length;
+  const allOnPageSelected = paginated.length > 0 && pageSelectedCount === paginated.length;
+  const bulkStatus = bulkOp?.kind === "status" ? bulkOp.status : null;
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
@@ -136,26 +199,64 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
     }
   };
 
-  const handleBulkAction = async () => {
-    if (selectedIds.size === 0) return;
+  /**
+   * Führt die im Dialog bestätigte Bulk-Aktion aus.
+   *
+   * Statuswechsel kann der Server in einem Rutsch (bulk-status). Anbieten und
+   * Löschen laufen pro Anmeldung, weil beide Endpunkte einzeln arbeiten –
+   * E-Mail-Versand bzw. Platzfreigabe hängen an der einzelnen Anmeldung.
+   */
+  const runBulkOp = async () => {
+    if (!bulkOp || selectedIds.size === 0) return;
     setBulkProcessing(true);
     try {
-      const res = await fetch("/api/admin/registrations/bulk-status", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ids: Array.from(selectedIds),
-          status: bulkStatus,
-          note: bulkNote || undefined,
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        toast(data.error || "Fehler bei Bulk-Aktion.", "error");
-        return;
+      if (bulkOp.kind === "status") {
+        const res = await fetch("/api/admin/registrations/bulk-status", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ids: Array.from(selectedIds),
+            status: bulkOp.status,
+            note: bulkNote || undefined,
+          }),
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          toast(data.error || "Fehler bei Bulk-Aktion.", "error");
+          return;
+        }
+        toast(`${selectedIds.size} Anmeldung(en) aktualisiert!`, "success");
+      } else {
+        const ids = bulkOp.kind === "offer" ? offerableIds : Array.from(selectedIds);
+        let done = 0;
+        let failed = 0;
+        for (const id of ids) {
+          try {
+            const res =
+              bulkOp.kind === "offer"
+                ? await fetch("/api/checkin/waitlist/offer", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ registrationId: id }),
+                  })
+                : await fetch(`/api/admin/registrations/${id}`, { method: "DELETE" });
+            if (res.ok) done++;
+            else failed++;
+          } catch {
+            failed++;
+          }
+        }
+        const verb = bulkOp.kind === "offer" ? "Platz angeboten" : "gelöscht";
+        if (failed === 0) {
+          toast(`${done} Anmeldung(en) ${verb}.`, "success");
+        } else {
+          toast(
+            `${done} von ${ids.length} ${verb} – ${failed} fehlgeschlagen.`,
+            done === 0 ? "error" : "success"
+          );
+        }
       }
-      toast(`${selectedIds.size} Anmeldung(en) aktualisiert!`, "success");
-      setBulkAction(false);
+      setBulkOp(null);
       setBulkNote("");
       fetchRegistrations();
     } catch {
@@ -165,21 +266,52 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
     }
   };
 
-  const toggleSelect = (id: number) => {
+  /**
+   * Auswahl umschalten. Mit gedrückter Shift-Taste wird der Bereich seit dem
+   * letzten Klick mitgenommen – wie man es aus Dateimanagern kennt.
+   */
+  const toggleSelect = (id: number, shiftKey = false) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
+      const anchor = lastClickedId;
+      if (shiftKey && anchor !== null && anchor !== id) {
+        const from = paginated.findIndex((r) => r.id === anchor);
+        const to = paginated.findIndex((r) => r.id === id);
+        if (from !== -1 && to !== -1) {
+          const select = !next.has(id);
+          for (const r of paginated.slice(Math.min(from, to), Math.max(from, to) + 1)) {
+            if (select) next.add(r.id);
+            else next.delete(r.id);
+          }
+          return next;
+        }
+      }
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+    setLastClickedId(id);
   };
 
-  const toggleSelectAll = () => {
-    if (selectedIds.size === filtered.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(filtered.map((r) => r.id)));
-    }
+  /** Kopf-Checkbox: wählt die sichtbare Seite aus bzw. ab. */
+  const toggleSelectPage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allOnPageSelected) paginated.forEach((r) => next.delete(r.id));
+      else paginated.forEach((r) => next.add(r.id));
+      return next;
+    });
+    setLastClickedId(null);
+  };
+
+  const selectAllFiltered = () => {
+    setSelectedIds(new Set(filtered.map((r) => r.id)));
+    setLastClickedId(null);
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    setLastClickedId(null);
   };
 
   const handleExport = () => {
@@ -245,30 +377,83 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
         </Button>
       </div>
 
-      {/* Bulk action bar */}
+      {/* Bulk action bar – bleibt beim Scrollen durch lange Listen sichtbar */}
       {selectedIds.size > 0 && (
-        <div className="flex flex-wrap items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <span className="text-sm font-medium text-blue-800">
-            {selectedIds.size} ausgewählt
-          </span>
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-green-700 border-green-300 hover:bg-green-50"
-            onClick={() => { setBulkStatus("approved"); setBulkAction(true); }}
-          >
-            <CheckCircle2 className="w-4 h-4 mr-1" />
-            Bestätigen
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-red-700 border-red-300 hover:bg-red-50"
-            onClick={() => { setBulkStatus("rejected"); setBulkAction(true); }}
-          >
-            <XCircle className="w-4 h-4 mr-1" />
-            Ablehnen
-          </Button>
+        <div className="sticky top-0 z-20 flex flex-col gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 shadow-sm sm:flex-row sm:items-center">
+          <div className="flex items-center gap-2 sm:shrink-0">
+            <span className="text-sm font-semibold text-blue-900">
+              {selectedIds.size} ausgewählt
+            </span>
+            {selectedIds.size < filtered.length && (
+              <button
+                type="button"
+                onClick={selectAllFiltered}
+                className="text-sm text-blue-700 underline underline-offset-2 hover:text-blue-900"
+              >
+                Alle {filtered.length} auswählen
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-green-300 bg-white text-green-700 hover:bg-green-50"
+              onClick={() => setBulkOp({ kind: "status", status: "approved" })}
+            >
+              <CheckCircle2 className="mr-1 h-4 w-4" />
+              Bestätigen
+            </Button>
+            {offerableIds.length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-blue-300 bg-white text-blue-700 hover:bg-blue-100"
+                onClick={() => setBulkOp({ kind: "offer" })}
+              >
+                <Mail className="mr-1 h-4 w-4" />
+                Platz anbieten ({offerableIds.length})
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-amber-300 bg-white text-amber-700 hover:bg-amber-50"
+              onClick={() => setBulkOp({ kind: "status", status: "pending" })}
+            >
+              <Clock className="mr-1 h-4 w-4" />
+              Auf ausstehend
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-red-300 bg-white text-red-700 hover:bg-red-50"
+              onClick={() => setBulkOp({ kind: "status", status: "rejected" })}
+            >
+              <XCircle className="mr-1 h-4 w-4" />
+              Ablehnen
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-red-300 bg-white text-red-700 hover:bg-red-50"
+              onClick={() => setBulkOp({ kind: "delete" })}
+            >
+              <Trash2 className="mr-1 h-4 w-4" />
+              Löschen
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-blue-900 hover:bg-blue-100"
+              onClick={clearSelection}
+              title="Auswahl aufheben"
+            >
+              <X className="mr-1 h-4 w-4" />
+              Aufheben
+            </Button>
+          </div>
         </div>
       )}
 
@@ -281,12 +466,12 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-10">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.size === filtered.length && filtered.length > 0}
-                      onChange={toggleSelectAll}
-                      className="h-4 w-4 rounded border-gray-300 cursor-pointer"
+                  <TableHead className="w-12">
+                    <Checkbox
+                      label="Alle auf dieser Seite auswählen"
+                      checked={allOnPageSelected}
+                      indeterminate={pageSelectedCount > 0 && !allOnPageSelected}
+                      onChange={toggleSelectPage}
                     />
                   </TableHead>
                   <TableHead>Name</TableHead>
@@ -300,13 +485,28 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
               </TableHeader>
               <TableBody>
                 {paginated.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>
-                      <input
-                        type="checkbox"
+                  <TableRow
+                    key={r.id}
+                    // twMerge sorgt dafür, dass hover hier den Standard der Zeile ersetzt
+                    className={cn(
+                      "cursor-pointer select-none",
+                      selectedIds.has(r.id) && "bg-blue-50 hover:bg-blue-100"
+                    )}
+                    // Shift+Klick markiert Bereiche – ohne das hier zieht der
+                    // Browser stattdessen Text über die Zeilen hinweg.
+                    onMouseDown={(e) => { if (e.shiftKey) e.preventDefault(); }}
+                    onClick={(e) => {
+                      if ((e.target as HTMLElement).closest("button, a, input, label")) return;
+                      toggleSelect(r.id, e.shiftKey);
+                    }}
+                  >
+                    <TableCell className="py-1">
+                      <Checkbox
+                        label={`${r.first_name} ${r.last_name} auswählen`}
                         checked={selectedIds.has(r.id)}
-                        onChange={() => toggleSelect(r.id)}
-                        className="h-4 w-4 rounded border-gray-300 cursor-pointer"
+                        onChange={(e) =>
+                          toggleSelect(r.id, (e.nativeEvent as MouseEvent).shiftKey === true)
+                        }
                       />
                     </TableCell>
                     <TableCell>
@@ -323,15 +523,39 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
                       </div>
                     </TableCell>
                     <TableCell className="hidden md:table-cell">{r.email}</TableCell>
-                    <TableCell className="hidden lg:table-cell">{Math.max(0, r.person_count - 1)}</TableCell>
+                    <TableCell className="hidden lg:table-cell">
+                      <span className="inline-flex items-center gap-1.5">
+                        {Math.max(0, r.person_count - 1)}
+                        {r.child_count > 0 && <ChildBadge count={r.child_count} />}
+                      </span>
+                    </TableCell>
                     <TableCell>
-                      <StatusBadge status={r.status || "pending"} />
+                      <div className="flex items-center gap-1.5">
+                        <StatusBadge status={r.status || "pending"} />
+                        {r.payment_failed && <span className="text-xs font-medium text-red-700">SEPA-Einzug fehlgeschlagen</span>}
+                        {r.status === "pending" && r.is_waitlist && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 leading-none">
+                            Warteliste
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     {!eventId && <TableCell className="hidden xl:table-cell max-w-[200px] truncate">{r.event_title}</TableCell>}
                     <TableCell className="hidden md:table-cell">{formatDateTime(r.created_at)}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         <RegistrationDetailButton registrationId={r.id} />
+                        {r.status === "pending" && r.is_waitlist && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="Platz anbieten – wird zahlbar und bekommt eine E-Mail"
+                            disabled={offeringId === r.id}
+                            onClick={() => handleOfferSpot(r)}
+                          >
+                            <Mail className="w-4 h-4 text-blue-500" />
+                          </Button>
+                        )}
                         {r.status !== "approved" && r.status !== "cancelled" && (
                           <Button
                             variant="ghost"
@@ -380,14 +604,45 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
 
           {/* ── Mobile: Card-Stack (< sm) ── */}
           <div className="sm:hidden space-y-3">
+            {/* Auswahl auch am Handy – vorher gab es sie nur in der Tabelle */}
+            <div className="flex items-center gap-1 px-1">
+              <Checkbox
+                label="Alle auf dieser Seite auswählen"
+                checked={allOnPageSelected}
+                indeterminate={pageSelectedCount > 0 && !allOnPageSelected}
+                onChange={toggleSelectPage}
+              />
+              <button
+                type="button"
+                onClick={toggleSelectPage}
+                className="text-sm text-muted-foreground"
+              >
+                {pageSelectedCount > 0 ? `${pageSelectedCount} auf dieser Seite` : "Alle auswählen"}
+              </button>
+            </div>
             {paginated.map((r) => (
               <div
                 key={r.id}
-                className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm"
+                onClick={(e) => {
+                  if ((e.target as HTMLElement).closest("button, a, input, label")) return;
+                  toggleSelect(r.id);
+                }}
+                className={cn(
+                  "rounded-lg border p-4 shadow-sm transition-colors",
+                  selectedIds.has(r.id)
+                    ? "border-blue-300 bg-blue-50"
+                    : "border-gray-200 bg-white"
+                )}
               >
                 {/* Name + Status */}
-                <div className="flex items-start justify-between gap-3 mb-3">
-                  <div className="min-w-0">
+                <div className="flex items-start justify-between gap-2 mb-3">
+                  <Checkbox
+                    label={`${r.first_name} ${r.last_name} auswählen`}
+                    checked={selectedIds.has(r.id)}
+                    onChange={() => toggleSelect(r.id)}
+                    className="-ml-2 -mt-2"
+                  />
+                  <div className="min-w-0 flex-1">
                     <p className="font-medium text-gray-900 text-sm">
                       {r.first_name} {r.last_name}
                       {r.is_walk_in && (
@@ -402,7 +657,15 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
                     )}
                     <p className="text-xs text-gray-400 mt-0.5">{formatDate(r.created_at)}</p>
                   </div>
-                  <StatusBadge status={r.status || "pending"} />
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <StatusBadge status={r.status || "pending"} />
+                    {r.payment_failed && <span className="text-xs font-medium text-red-700">SEPA-Einzug fehlgeschlagen</span>}
+                    {r.status === "pending" && r.is_waitlist && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 leading-none">
+                        Warteliste
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Actions */}
@@ -412,6 +675,18 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
                     size="sm"
                     className="w-full justify-start"
                   />
+                  {r.status === "pending" && r.is_waitlist && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-blue-700 border-blue-200 w-full"
+                      disabled={offeringId === r.id}
+                      onClick={() => handleOfferSpot(r)}
+                    >
+                      <Mail className="w-3.5 h-3.5 mr-1.5" />
+                      Platz anbieten
+                    </Button>
+                  )}
                   {r.status !== "approved" && r.status !== "cancelled" && (
                     <Button
                       size="sm"
@@ -537,19 +812,31 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
       </Dialog>
 
       {/* Bulk action dialog */}
-      <Dialog open={bulkAction} onOpenChange={(o) => { if (!o) { setBulkAction(false); setBulkNote(""); } }}>
+      <Dialog open={!!bulkOp} onOpenChange={(o) => { if (!o) { setBulkOp(null); setBulkNote(""); } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {bulkStatus === "approved"
+              {bulkOp?.kind === "delete"
+                ? `${selectedIds.size} Anmeldung(en) löschen`
+                : bulkOp?.kind === "offer"
+                ? `${offerableIds.length} Wartelisten-Anmeldung(en): Platz anbieten`
+                : bulkStatus === "approved"
                 ? `${selectedIds.size} Anmeldung(en) bestätigen`
-                : `${selectedIds.size} Anmeldung(en) ablehnen`}
+                : bulkStatus === "rejected"
+                ? `${selectedIds.size} Anmeldung(en) ablehnen`
+                : `${selectedIds.size} Anmeldung(en) auf ausstehend setzen`}
             </DialogTitle>
             <DialogDescription>
-              Diese Aktion betrifft alle ausgewählten Anmeldungen. E-Mail-Benachrichtigungen werden versendet.
+              {bulkOp?.kind === "delete"
+                ? "Die Anmeldungen werden endgültig entfernt und die Plätze wieder freigegeben. Das lässt sich nicht rückgängig machen."
+                : bulkOp?.kind === "offer"
+                ? "Die Warteliste-Markierung fällt weg, der Status bleibt ausstehend. Alle bekommen eine E-Mail mit dem Platzangebot. Nicht ausgewählte Wartelisten-Anmeldungen bleiben unberührt."
+                : bulkStatus === "pending"
+                ? "Die ausgewählten Anmeldungen wandern zurück auf ausstehend."
+                : "Diese Aktion betrifft alle ausgewählten Anmeldungen. E-Mail-Benachrichtigungen werden versendet."}
             </DialogDescription>
           </DialogHeader>
-          {bulkStatus === "rejected" && (
+          {bulkOp?.kind === "status" && bulkOp.status === "rejected" && (
             <div className="space-y-2">
               <Label htmlFor="bulk-note">Begründung (optional)</Label>
               <Textarea
@@ -562,16 +849,29 @@ export default function RegistrationTable({ eventId, upcomingOnly = false }: Reg
             </div>
           )}
           <div className="flex justify-end gap-3 mt-4">
-            <Button variant="outline" onClick={() => { setBulkAction(false); setBulkNote(""); }}>
+            <Button variant="outline" onClick={() => { setBulkOp(null); setBulkNote(""); }}>
               Abbrechen
             </Button>
             <Button
-              variant={bulkStatus === "rejected" ? "destructive" : "default"}
-              onClick={handleBulkAction}
+              variant={
+                bulkOp?.kind === "delete" ||
+                (bulkOp?.kind === "status" && bulkOp.status === "rejected")
+                  ? "destructive"
+                  : "default"
+              }
+              onClick={runBulkOp}
               disabled={bulkProcessing}
             >
               {bulkProcessing && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-              {bulkStatus === "approved" ? "Alle bestätigen" : "Alle ablehnen"}
+              {bulkOp?.kind === "delete"
+                ? "Alle löschen"
+                : bulkOp?.kind === "offer"
+                ? "Platz anbieten"
+                : bulkStatus === "approved"
+                ? "Alle bestätigen"
+                : bulkStatus === "rejected"
+                ? "Alle ablehnen"
+                : "Auf ausstehend setzen"}
             </Button>
           </div>
         </DialogContent>

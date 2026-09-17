@@ -6,7 +6,7 @@ import {
 } from "@/lib/email";
 import { getEvents } from "@/lib/db";
 import { checkRateLimit, getClientIp, RATE_LIMITS } from "@/lib/ratelimit";
-import { validateHoneypot } from "@/lib/honeypot";
+import { honeypotFailure } from "@/lib/honeypot";
 
 const ADMIN_EMAIL =
   process.env.ADMIN_EMAIL || process.env.EMAIL_FROM?.match(/<(.+)>/)?.[1] || "";
@@ -23,8 +23,18 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    if (!validateHoneypot({ _hp: body?._hp, _ts: body?._ts })) {
-      return NextResponse.json({ error: "Ungültige Anfrage" }, { status: 400 });
+    const abgewiesen = honeypotFailure({ _hp: body?._hp, _ts: body?._ts });
+    if (abgewiesen) {
+      console.warn(`Kontaktanfrage abgewiesen (${abgewiesen}), IP ${ip}`);
+      return NextResponse.json(
+        {
+          error:
+            abgewiesen === "too_fast"
+              ? "Das ging zu schnell. Bitte sende das Formular gleich noch einmal ab."
+              : "Ungültige Anfrage",
+        },
+        { status: 400 }
+      );
     }
 
     const { first_name, last_name, email, whatsapp_number, message, event_id, consent_to_store } =

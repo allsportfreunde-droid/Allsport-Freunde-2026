@@ -1,4 +1,5 @@
 import { getSQL, isPostgresConfigured } from "./utils";
+import { personRevenueSql } from "./person-revenue";
 import { findRegistration } from "./registrations";
 import type { CheckinParticipant, CheckinStatusResponse, WaitlistEntry } from "../types";
 
@@ -41,9 +42,9 @@ export async function getCheckinEvents(): Promise<{
       e.location,
       e.entry_price::float8 AS entry_price,
       COUNT(CASE WHEN r.status = 'approved' THEN rp.id ELSE NULL END)::int AS approved_count,
-      COUNT(CASE WHEN r.status = 'approved' AND r.checked_in_at IS NOT NULL THEN rp.id ELSE NULL END)::int AS checked_in_count,
-      COUNT(CASE WHEN r.status = 'approved' THEN rp.id ELSE NULL END)::float8 * COALESCE(e.entry_price::float8, 0) AS expected_revenue,
-      COUNT(CASE WHEN r.status = 'approved' AND r.checked_in_at IS NOT NULL THEN rp.id ELSE NULL END)::float8 * COALESCE(e.entry_price::float8, 0) AS actual_revenue
+      COUNT(CASE WHEN r.status = 'approved' AND rp.checked_in_at IS NOT NULL THEN rp.id ELSE NULL END)::int AS checked_in_count,
+      COALESCE(SUM(CASE WHEN r.status = 'approved' THEN ${personRevenueSql(sql)} ELSE 0 END), 0)::float8 AS expected_revenue,
+      COALESCE(SUM(CASE WHEN r.status = 'approved' AND rp.checked_in_at IS NOT NULL THEN ${personRevenueSql(sql)} ELSE 0 END), 0)::float8 AS actual_revenue
     FROM events e
     LEFT JOIN registrations r ON e.id = r.event_id
     LEFT JOIN registration_persons rp ON rp.registration_id = r.id AND rp.cancelled_at IS NULL
@@ -62,9 +63,9 @@ export async function getCheckinEvents(): Promise<{
       e.location,
       e.entry_price::float8 AS entry_price,
       COUNT(CASE WHEN r.status = 'approved' THEN rp.id ELSE NULL END)::int AS approved_count,
-      COUNT(CASE WHEN r.status = 'approved' AND r.checked_in_at IS NOT NULL THEN rp.id ELSE NULL END)::int AS checked_in_count,
-      COUNT(CASE WHEN r.status = 'approved' THEN rp.id ELSE NULL END)::float8 * COALESCE(e.entry_price::float8, 0) AS expected_revenue,
-      COUNT(CASE WHEN r.status = 'approved' AND r.checked_in_at IS NOT NULL THEN rp.id ELSE NULL END)::float8 * COALESCE(e.entry_price::float8, 0) AS actual_revenue
+      COUNT(CASE WHEN r.status = 'approved' AND rp.checked_in_at IS NOT NULL THEN rp.id ELSE NULL END)::int AS checked_in_count,
+      COALESCE(SUM(CASE WHEN r.status = 'approved' THEN ${personRevenueSql(sql)} ELSE 0 END), 0)::float8 AS expected_revenue,
+      COALESCE(SUM(CASE WHEN r.status = 'approved' AND rp.checked_in_at IS NOT NULL THEN ${personRevenueSql(sql)} ELSE 0 END), 0)::float8 AS actual_revenue
     FROM events e
     LEFT JOIN registrations r ON e.id = r.event_id
     LEFT JOIN registration_persons rp ON rp.registration_id = r.id AND rp.cancelled_at IS NULL
@@ -119,6 +120,17 @@ export async function saveQRCode(
   `;
 }
 
+/** Parallele Webhooks behalten denselben QR-Code samt Token. */
+export async function saveCheckoutQRCode(registrationId: number, qrCode: string, qrToken: string): Promise<string> {
+  const sql = getSQL();
+  const rows = await sql`UPDATE registrations
+    SET qr_code = COALESCE(qr_code, ${qrCode}),
+        qr_token = CASE WHEN qr_code IS NULL THEN ${qrToken} ELSE qr_token END
+    WHERE id = ${registrationId} RETURNING qr_code`;
+  if (!rows[0]) throw new Error("Anmeldung für QR-Code fehlt.");
+  return (rows[0] as { qr_code: string }).qr_code;
+}
+
 export async function getRegistrationByQRToken(
   qrToken: string
 ): Promise<import("../types").RegistrationWithEvent | null> {
@@ -132,6 +144,7 @@ export async function getRegistrationByQRToken(
       COALESCE((SELECT rp.first_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS first_name,
       COALESCE((SELECT rp.last_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS last_name,
       (SELECT COUNT(*)::int FROM registration_persons rp WHERE rp.registration_id = r.id AND rp.cancelled_at IS NULL) AS person_count,
+      (SELECT COUNT(*)::int FROM registration_persons rp WHERE rp.registration_id = r.id AND rp.cancelled_at IS NULL AND rp.is_child) AS child_count,
       e.title AS event_title, TO_CHAR(e.date, 'YYYY-MM-DD') AS event_date, e.category AS event_category
     FROM registrations r
     JOIN events e ON r.event_id = e.id
@@ -148,21 +161,23 @@ export async function getRegistrationWithPersonsByQRToken(token: string): Promis
   status: string;
   checked_in_at: string | null;
   is_walk_in: boolean;
+  /** Zeitpunkt der Zahlung – null heißt offen. */
+  paid_at: string | null;
   persons: import("../types").RegistrationPerson[];
 } | null> {
   const sql = getSQL();
   const rows = await sql`
     SELECT
-      r.id, r.email, r.status, r.checked_in_at, r.is_walk_in,
+      r.id, r.email, r.status, r.checked_in_at, r.is_walk_in, r.paid_at,
       COALESCE((SELECT rp.first_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS first_name,
       COALESCE((SELECT rp.last_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS last_name
     FROM registrations r
     WHERE r.qr_token = ${token}
   `;
   if (!rows[0]) return null;
-  const reg = rows[0] as { id: number; first_name: string; last_name: string; email: string | null; status: string; checked_in_at: string | null; is_walk_in: boolean };
+  const reg = rows[0] as { id: number; first_name: string; last_name: string; email: string | null; status: string; checked_in_at: string | null; is_walk_in: boolean; paid_at: string | null };
   const persons = await sql`
-    SELECT id::text AS id, registration_id, first_name, last_name, checked_in_at, cancelled_at, created_at
+    SELECT id::text AS id, registration_id, first_name, last_name, is_child, checked_in_at, cancelled_at, created_at
     FROM registration_persons
     WHERE registration_id = ${reg.id} AND cancelled_at IS NULL
     ORDER BY created_at ASC
@@ -237,7 +252,7 @@ async function getPersonsByRegistration(
   const sql = getSQL();
   type PersonRow = import("../types").RegistrationPerson & { registration_id: number };
   const personRows = await sql`
-    SELECT id::text AS id, registration_id, first_name, last_name, checked_in_at, cancelled_at, created_at
+    SELECT id::text AS id, registration_id, first_name, last_name, is_child, checked_in_at, cancelled_at, created_at
     FROM registration_persons
     WHERE registration_id = ANY(${regIds})
       AND cancelled_at IS NULL
@@ -260,7 +275,7 @@ export async function getEventWaitlist(eventId: number): Promise<WaitlistEntry[]
   const sql = getSQL();
   const rows = await sql`
     SELECT
-      r.id, r.email, r.phone, r.notes, r.created_at,
+      r.id, r.email, r.phone, r.notes, r.created_at, r.is_waitlist,
       COALESCE((SELECT rp.first_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS first_name,
       COALESCE((SELECT rp.last_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS last_name
     FROM registrations r
@@ -284,6 +299,25 @@ export async function getEventWaitlist(eventId: number): Promise<WaitlistEntry[]
  * the transition, so the caller sends the approval email exactly once even if
  * two admins tap "Bestätigen" at the same time.
  */
+/**
+ * Bietet einer Wartelisten-Anmeldung einen frei gewordenen Platz an: das
+ * Wartelisten-Flag fällt weg, der Status bleibt 'pending'. Erst damit wird
+ * die Anmeldung zahlbar.
+ *
+ * Gibt false zurück, wenn nichts zu tun war – etwa weil zwei Admins
+ * gleichzeitig geklickt haben. So verschickt nur der erste Klick die Mail.
+ */
+export async function offerWaitlistSpot(registrationId: number): Promise<boolean> {
+  const sql = getSQL();
+  const rows = await sql`
+    UPDATE registrations
+    SET is_waitlist = FALSE
+    WHERE id = ${registrationId} AND status = 'pending' AND is_waitlist = TRUE
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
 export async function approvePendingRegistration(registrationId: number): Promise<boolean> {
   const sql = getSQL();
   const rows = await sql`
@@ -331,7 +365,7 @@ export async function getCheckinStatus(eventId: number): Promise<CheckinStatusRe
   const sql = getSQL();
   const rows = await sql`
     SELECT
-      r.id, r.email, r.phone, r.checked_in_at, r.checked_in_by, r.is_walk_in, r.notes,
+      r.id, r.email, r.phone, r.checked_in_at, r.checked_in_by, r.is_walk_in, r.notes, r.paid_at,
       COALESCE((SELECT rp.first_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS first_name,
       COALESCE((SELECT rp.last_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS last_name,
       GREATEST(0, (SELECT COUNT(*)::int FROM registration_persons rp WHERE rp.registration_id = r.id AND rp.cancelled_at IS NULL) - 1) AS guests
@@ -384,12 +418,13 @@ export async function getCheckinStatus(eventId: number): Promise<CheckinStatusRe
 
 export async function createWalkInRegistration(data: {
   event_id: number;
-  persons: Array<{ firstName: string; lastName: string }>;
+  /** isChild kommt aus dem Toggle im Formular; fehlt es, gilt "Erwachsener". */
+  persons: Array<{ firstName: string; lastName: string; isChild?: boolean }>;
   email: string | null;
   phone: string | null;
   notes: string | null;
   checked_in_by: string | null;
-}): Promise<{ id: number; alreadyExists: boolean }> {
+}): Promise<{ id: number; status_token: string | null; alreadyExists: boolean }> {
   if (!isPostgresConfigured()) {
     const { createLocalWalkInRegistration } = await import("../local-data");
     return createLocalWalkInRegistration(data);
@@ -397,7 +432,7 @@ export async function createWalkInRegistration(data: {
 
   if (data.email) {
     const existing = await findRegistration(data.event_id, data.email);
-    if (existing) return { id: existing.id, alreadyExists: true };
+    if (existing) return { id: existing.id, status_token: existing.status_token, alreadyExists: true };
   }
 
   const sql = getSQL();
@@ -417,15 +452,15 @@ export async function createWalkInRegistration(data: {
   // gelten alle Personen sofort als eingecheckt – nicht nur die Anmeldung.
   for (const person of data.persons) {
     await sql`
-      INSERT INTO registration_persons (registration_id, first_name, last_name, checked_in_at)
+      INSERT INTO registration_persons (registration_id, first_name, last_name, is_child, checked_in_at)
       VALUES (
-        ${registrationId}, ${person.firstName}, ${person.lastName},
+        ${registrationId}, ${person.firstName}, ${person.lastName}, ${person.isChild === true},
         ${data.checked_in_by ? sql`NOW()` : sql`NULL`}
       )
     `;
   }
 
-  return { id: registrationId, alreadyExists: false };
+  return { id: registrationId, status_token: statusToken, alreadyExists: false };
 }
 
 export async function undoCheckin(registrationId: number): Promise<void> {

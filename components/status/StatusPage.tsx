@@ -3,8 +3,18 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import StatusBadge from "./StatusBadge";
-import { Calendar, Clock, MapPin, Euro, Shirt, Mail, Users, X, CheckCircle2 } from "lucide-react";
+import ChildBadge from "@/components/ChildBadge";
+import { Calendar, Clock, MapPin, Euro, Shirt, Mail, Users, X, CheckCircle2, Loader2 } from "lucide-react";
 import type { RegistrationStatusInfo, RegistrationPerson, RegistrationStatus } from "@/lib/types";
+import { Button } from "@/components/ui/button";
+import { formatEuro } from "@/lib/finance";
+import { calculateRegistrationPrice, formatEventPrice } from "@/lib/price";
+import {
+  canCancelRegistration,
+  cancellationBlockedReason,
+  cancellationDeadline,
+  formatDeadline,
+} from "@/lib/cancellation";
 
 const categoryLabels: Record<string, string> = {
   fussball: "Fußball",
@@ -38,10 +48,12 @@ interface PersonRowProps {
   index: number;
   token: string;
   registrationStatus: RegistrationStatus;
+  /** false = Stornofrist vorbei oder Veranstaltung schon begonnen */
+  cancellationOpen: boolean;
   onCancelled: (personId: string, allCancelled: boolean) => void;
 }
 
-function PersonRow({ person, index, token, registrationStatus, onCancelled }: PersonRowProps) {
+function PersonRow({ person, index, token, registrationStatus, cancellationOpen, onCancelled }: PersonRowProps) {
   const [cancelling, setCancelling] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +61,7 @@ function PersonRow({ person, index, token, registrationStatus, onCancelled }: Pe
   const isCancelled = !!person.cancelled_at;
   const canCancel =
     !isCancelled &&
+    cancellationOpen &&
     (registrationStatus === "pending" || registrationStatus === "approved");
 
   async function handleCancel() {
@@ -86,6 +99,7 @@ function PersonRow({ person, index, token, registrationStatus, onCancelled }: Pe
           <div className="min-w-0">
             <p className={`text-sm font-medium ${isCancelled ? "line-through text-gray-400" : "text-gray-900"}`}>
               {person.first_name} {person.last_name}
+              {person.is_child && <ChildBadge className="ml-1.5 align-middle" />}
               {index === 0 && <span className="ml-1.5 text-xs text-gray-400 font-normal">(du)</span>}
             </p>
             {person.checked_in_at && (
@@ -150,9 +164,11 @@ function PersonRow({ person, index, token, registrationStatus, onCancelled }: Pe
 export default function StatusPage({
   info,
   justCancelled = false,
+  paymentResult = null,
 }: {
   info: RegistrationStatusInfo;
   justCancelled?: boolean;
+  paymentResult?: "erfolg" | "abbruch" | null;
 }) {
   const token = typeof window !== "undefined"
     ? window.location.pathname.split("/").pop() ?? ""
@@ -166,7 +182,73 @@ export default function StatusPage({
   const [error, setError] = useState<string | null>(null);
 
   const activePersons = persons.filter((p) => !p.cancelled_at);
-  const canCancel = status === "pending" || status === "approved";
+  const [payLoading, setPayLoading] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+
+  const eventPricing = {
+    price: info.event_price,
+    entry_price: info.event_entry_price,
+    child_entry_price: info.event_child_entry_price,
+    child_price: info.event_child_price,
+  };
+  const pricing = calculateRegistrationPrice(eventPricing, activePersons.length, activePersons.filter((p) => p.is_child).length);
+  const totalPrice = pricing ? pricing.totalCents / 100 : null;
+  const isPaid = info.paid_at != null;
+  // Tatsächlicher Zahlungsstand aus der Datenbank – nicht aus dem URL-Parameter.
+  const paymentState = info.payment_state ?? (isPaid ? "paid" : "open");
+  const paymentReceived = paymentState === "paid";
+  const paymentPending = paymentState === "processing" || paymentState === "checking";
+  const canPay =
+    totalPrice != null &&
+    totalPrice > 0 &&
+    !paymentReceived &&
+    !paymentPending &&
+    !info.is_waitlist &&
+    (status === "pending" || status === "approved");
+
+  async function handlePay() {
+    setPayLoading(true);
+    setPayError(null);
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status_token: token }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.url) {
+        setPayError(data.error ?? "Zahlung konnte nicht gestartet werden.");
+        return;
+      }
+      window.location.href = data.url;
+    } catch {
+      setPayError("Netzwerkfehler. Bitte versuche es erneut.");
+    } finally {
+      setPayLoading(false);
+    }
+  }
+  // Die Stornofrist steht am Event – entweder als eigener Zeitpunkt oder als
+  // Standard von 24 Stunden vor Beginn. Dieselbe Regel setzen die Routen
+  // serverseitig durch.
+  const cancellationEvent = {
+    event_date: info.event_date,
+    event_time: info.event_time,
+    cancellation_deadline: info.event_cancellation_deadline,
+    // Ohne diesen Wert hielte canCancelRegistration jede Anmeldung für
+    // unbezahlt und würde die Frist nie durchsetzen.
+    paid_at: info.paid_at,
+    payment_in_progress: info.payment_in_progress,
+  };
+  // Unbezahlte Anmeldungen dürfen bis zum Beginn zurückgezogen werden – die
+  // Frist schützt nur, woran eine Erstattung hängt. Der Beginn beendet die
+  // Stornierung für alle.
+  const cancellationOpen = canCancelRegistration(cancellationEvent);
+  // Warum nicht storniert werden kann – benennt Frist oder Beginn, exakt wie
+  // die Antwort der Route.
+  const blockedReason = cancellationBlockedReason(cancellationEvent);
+  const deadline = cancellationDeadline(cancellationEvent);
+  const isActive = status === "pending" || status === "approved";
+  const canCancel = isActive && cancellationOpen;
 
   function handlePersonCancelled(personId: string, allCancelled: boolean) {
     const now = new Date().toISOString();
@@ -215,6 +297,66 @@ export default function StatusPage({
           </div>
         )}
 
+        {paymentResult === "erfolg" && paymentState === "paid" && (
+          <div className={`border rounded-lg p-4 text-sm space-y-1 ${
+            status === "approved"
+              ? "bg-green-50 border-green-200 text-green-800"
+              : "bg-amber-50 border-amber-200 text-amber-800"
+          }`}>
+            <p>✓ Zahlung eingegangen.</p>
+            {status === "approved" && (
+              <>
+                <p>Deine Teilnahme ist bestätigt.</p>
+                {info.qr_code && <p>Deinen Check-In QR-Code findest du unten.</p>}
+              </>
+            )}
+            {status === "cancelled" && (
+              <>
+                <p>Deine Anmeldung bleibt storniert.</p>
+                <p>Eine mögliche Erstattung wird geprüft.</p>
+              </>
+            )}
+            {status === "rejected" && (
+              <>
+                <p>Deine Anmeldung bleibt abgelehnt.</p>
+                <p>Eine mögliche Erstattung wird geprüft.</p>
+              </>
+            )}
+            {status === "pending" && <p>Deine Anmeldung wartet weiterhin auf Bestätigung.</p>}
+          </div>
+        )}
+
+        {paymentResult === "erfolg" && paymentState === "processing" && (
+          <div className={`border rounded-lg p-4 text-sm space-y-1 ${
+            status === "approved"
+              ? "bg-green-50 border-green-200 text-green-800"
+              : "bg-amber-50 border-amber-200 text-amber-800"
+          }`}>
+            <p>✓ SEPA-Einzug gestartet.</p>
+            {status === "approved" && (
+              <>
+                <p>Deine Teilnahme ist bestätigt.</p>
+                {info.qr_code && <p>Deinen Check-In QR-Code findest du unten.</p>}
+              </>
+            )}
+            {status === "cancelled" && <p>Deine Anmeldung bleibt storniert.</p>}
+            {status === "rejected" && <p>Deine Anmeldung bleibt abgelehnt.</p>}
+            {status === "pending" && <p>Deine Anmeldung wartet weiterhin auf Bestätigung.</p>}
+          </div>
+        )}
+
+        {paymentResult === "erfolg" && paymentState === "checking" && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+            Deine Zahlung wird noch geprüft. Bitte lade die Seite in Kürze neu.
+          </div>
+        )}
+
+        {paymentResult === "abbruch" && (paymentState === "open" || paymentState === "failed") && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+            Du hast die Checkout-Seite verlassen. Deine Anmeldung bleibt bestehen.
+          </div>
+        )}
+
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -224,9 +366,36 @@ export default function StatusPage({
           </CardHeader>
           <CardContent className="space-y-4">
             {status === "pending" && (
-              <p className="text-sm text-amber-700 bg-amber-50 rounded-lg p-3">
-                Deine Anmeldung wird derzeit geprüft. Du erhältst eine E-Mail, sobald sie bestätigt oder abgelehnt wurde.
-              </p>
+              <div className="text-sm text-amber-700 bg-amber-50 rounded-lg p-3 space-y-2">
+                {info.is_waitlist ? (
+                  <p>
+                    Das Event war bei deiner Anmeldung bereits ausgebucht – du
+                    stehst auf der Warteliste. Wir melden uns per E-Mail, sobald
+                    ein Platz frei wird. Bezahlen musst du erst, wenn dein Platz
+                    feststeht.
+                  </p>
+                ) : totalPrice != null && totalPrice > 0 ? (
+                  <>
+                    <p>
+                      Dein Platz ist reserviert. Offen ist noch der
+                      Teilnahmebetrag von{" "}
+                      <span className="font-semibold">
+                        {formatEuro(totalPrice)}
+                      </span>
+                      .
+                    </p>
+                    <p>
+                      Bezahle ihn unten, damit deine Anmeldung bestätigt werden
+                      kann.
+                    </p>
+                  </>
+                ) : (
+                  <p>
+                    Deine Anmeldung wird derzeit geprüft. Du erhältst eine
+                    E-Mail, sobald sie bestätigt oder abgelehnt wurde.
+                  </p>
+                )}
+              </div>
             )}
             {status === "approved" && (
               <div className="space-y-3">
@@ -297,6 +466,7 @@ export default function StatusPage({
                   index={idx}
                   token={token}
                   registrationStatus={status}
+                  cancellationOpen={cancellationOpen}
                   onCancelled={handlePersonCancelled}
                 />
               ))}
@@ -319,6 +489,19 @@ export default function StatusPage({
                 >
                   Anmeldung stornieren
                 </button>
+              )}
+
+              {canCancel && deadline && isPaid && (
+                <p className="mt-2 text-xs text-gray-400">
+                  Stornierung möglich bis {formatDeadline(deadline)}.
+                </p>
+              )}
+
+              {isActive && blockedReason && (
+                <p className="mt-2 text-xs text-gray-400">
+                  {blockedReason} Melde dich bitte direkt bei uns, wenn du nicht
+                  teilnehmen kannst.
+                </p>
               )}
 
               {confirmAllOpen && (
@@ -354,6 +537,78 @@ export default function StatusPage({
           </Card>
         )}
 
+        {(canPay || paymentReceived || paymentPending) && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Zahlung</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {paymentReceived ? (
+                <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 rounded-lg p-3">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>
+                    {info.paid_at ? `Bezahlt am ${formatDateTime(info.paid_at)}` : "Zahlung eingegangen"}
+                    {info.amount_paid != null && <> · {formatEuro(info.amount_paid)}</>}
+                  </span>
+                </div>
+              ) : paymentState === "processing" ? (
+                <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 rounded-lg p-3">
+                  <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+                  <span>
+                    SEPA-Einzug läuft
+                    {info.checkout_amount != null && <> · {formatEuro(info.checkout_amount)}</>}
+                    . Bitte nicht erneut bezahlen.
+                  </span>
+                </div>
+              ) : paymentPending ? (
+                <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 rounded-lg p-3">
+                  <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+                  <span>Deine Zahlung wird noch geprüft. Bitte lade die Seite in Kürze neu.</span>
+                </div>
+              ) : (
+                <>
+              {paymentState === "failed" && (
+                <div className="text-sm text-red-700 bg-red-50 rounded-lg p-3 space-y-1">
+                  <p>Der SEPA-Einzug ist fehlgeschlagen.</p>
+                  {status === "approved" && <p>Deine Teilnahme bleibt bestätigt.</p>}
+                </div>
+              )}
+              <div className="flex items-center justify-between gap-3">
+                <span className="flex items-center gap-2 text-sm text-gray-600">
+                  <Euro className="w-4 h-4 text-gray-400" />
+                  {pricing?.breakdown}
+                </span>
+                <span className="text-base font-semibold text-gray-900">
+                  {formatEuro(totalPrice!)}
+                </span>
+              </div>
+              <Button onClick={handlePay} disabled={payLoading} className="w-full">
+                {payLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Wird geöffnet...
+                  </>
+                ) : (
+                  "Jetzt bezahlen"
+                )}
+              </Button>
+              {payError && (
+                <p className="text-xs text-red-600">{payError}</p>
+              )}
+              <p className="text-xs text-gray-400">
+                {paymentState === "failed"
+                  ? "Du kannst die Zahlung erneut starten."
+                  : "Nach erfolgreicher Zahlung wird der Zahlungsstatus hier aktualisiert."}
+                {deadline && (
+                  <> Du kannst bis {formatDeadline(deadline)} stornieren.</>
+                )}
+              </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Event-Details</CardTitle>
@@ -376,7 +631,7 @@ export default function StatusPage({
               </div>
               <div className="flex items-center gap-2 text-gray-600">
                 <Euro className="w-4 h-4 text-gray-400" />
-                <span>{info.event_price}</span>
+                <span>{formatEventPrice(eventPricing)}</span>
               </div>
               <div className="flex items-center gap-2 text-gray-600">
                 <Shirt className="w-4 h-4 text-gray-400" />

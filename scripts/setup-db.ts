@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { neon } from "@neondatabase/serverless";
+import { migrateCheckoutFulfillment } from "../lib/db/checkout-schema";
 
 const dbUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
 if (!dbUrl) {
@@ -38,6 +39,14 @@ async function setup() {
   await sql`UPDATE events SET status = 'published', published_at = created_at WHERE status = 'active'`;
   // Migration: parking_location für bestehende Datenbanken
   await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS parking_location TEXT`;
+  // Migration: Stripe Price ID für bestehende Datenbanken
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS stripe_price_id VARCHAR(255)`;
+  // Kinderpreis: NULL übernimmt den Erwachsenenpreis, 0 bedeutet kostenlos.
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS child_entry_price NUMERIC(10, 2) CHECK (child_entry_price >= 0)`;
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS stripe_child_price_id VARCHAR(255)`;
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS child_price VARCHAR(100)`;
+  // Migration: eigener Stornozeitpunkt (leer = 24 Stunden vor Beginn)
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS cancellation_deadline TIMESTAMP`;
   console.log("  ✓ Tabelle 'events' erstellt");
 
   await sql`
@@ -63,6 +72,25 @@ async function setup() {
   await sql`ALTER TABLE registrations ALTER COLUMN email DROP NOT NULL`;
   await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS is_walk_in BOOLEAN NOT NULL DEFAULT FALSE`;
   await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS notes TEXT`;
+  // Migration: Warteliste vom normalen "pending" unterscheidbar machen
+  await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS is_waitlist BOOLEAN NOT NULL DEFAULT FALSE`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_registrations_is_waitlist ON registrations(is_waitlist) WHERE is_waitlist = TRUE`;
+  // Migration: Zahlungen an der Anmeldung festhalten
+  await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP`;
+  await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS amount_paid DECIMAL(10,2)`;
+  await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS stripe_session_id VARCHAR(255)`;
+  await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS stripe_payment_intent_id VARCHAR(255)`;
+  await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS paid_person_prices JSONB`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS checkout_pricing (
+      session_id VARCHAR(255) PRIMARY KEY,
+      registration_id INTEGER NOT NULL REFERENCES registrations(id) ON DELETE CASCADE,
+      person_prices JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_registrations_stripe_session ON registrations(stripe_session_id) WHERE stripe_session_id IS NOT NULL`;
+  await migrateCheckoutFulfillment(sql);
   await sql`CREATE INDEX IF NOT EXISTS idx_registrations_is_walk_in ON registrations(is_walk_in) WHERE is_walk_in = TRUE`;
   console.log("  ✓ Tabelle 'registrations' erstellt");
 

@@ -20,6 +20,15 @@ import { Loader2, Globe, EyeOff, LayoutTemplate, Plus, Trash2, GripVertical, Ale
 import { Reorder } from "framer-motion";
 import type { EventWithRegistrations, EventCreateInput, EventTemplate, EventImageInput, EventCost } from "@/lib/types";
 import { formatEuro } from "@/lib/finance";
+import { AmountInput } from "@/components/ui/AmountInput";
+import {
+  FREE_PRICE_LABEL,
+  amountFromCents,
+  centsFromAmount,
+  parsePriceText,
+  priceFromAmount,
+  type PriceFields,
+} from "@/lib/price";
 
 interface EventFormProps {
   event?: EventWithRegistrations;
@@ -48,13 +57,53 @@ function validateImageUrl(url: string): Promise<boolean> {
   });
 }
 
+/**
+ * Eingabemodus für den Preis. Alle drei münden in dieselben zwei DB-Felder,
+ * siehe lib/price.ts.
+ */
+type PriceMode = "amount" | "stripe" | "text";
+
+/** Leitet den passenden Eingabemodus aus einem bestehenden Datensatz ab. */
+function derivePriceState(
+  source?: { price?: string; entry_price?: number | null; stripe_price_id?: string | null } | null
+): { mode: PriceMode; cents: number; text: string; stripeId: string } {
+  const text = (source?.price ?? "").trim();
+  const amount = source?.entry_price ?? null;
+  const textAmount = text ? parsePriceText(text) : null;
+  const stripeId = source?.stripe_price_id ?? "";
+
+  // Eine hinterlegte Price ID bedeutet: der Betrag kam aus Stripe
+  if (stripeId) {
+    return { mode: "stripe", cents: centsFromAmount(amount ?? textAmount), text: "", stripeId };
+  }
+  // Kein Text, ein reiner Betrag oder schlicht "Kostenlos" → Betragsmodus
+  if (!text || textAmount != null || (text === FREE_PRICE_LABEL && amount == null)) {
+    return { mode: "amount", cents: centsFromAmount(amount ?? textAmount), text: "", stripeId: "" };
+  }
+  // Echter Freitext – der Betrag bleibt als Berechnungsgrundlage erhalten
+  return { mode: "text", cents: centsFromAmount(amount), text, stripeId: "" };
+}
+
+/** Baut die beiden DB-Felder aus dem aktuellen Eingabezustand. */
+function priceFieldsFor(mode: PriceMode, cents: number, text: string): PriceFields {
+  if (mode === "text") {
+    const trimmed = text.trim();
+    if (trimmed) {
+      return { price: trimmed, entry_price: cents > 0 ? amountFromCents(cents) : null };
+    }
+  }
+  return priceFromAmount(amountFromCents(cents));
+}
+
 export default function EventForm({ event }: EventFormProps) {
   const router = useRouter();
   const { toast } = useToast();
   const isEdit = !!event;
   const isDraft = !isEdit || event.status === "draft";
 
-  const [formData, setFormData] = useState<EventCreateInput>({
+  // Preis bewusst NICHT in formData – er hat unten seinen eigenen Zustand,
+  // damit es im Formular keine zweite Quelle der Wahrheit gibt.
+  const [formData, setFormData] = useState<Omit<EventCreateInput, "price" | "entry_price">>({
     title: event?.title ?? "",
     category: event?.category ?? "fussball",
     description: event?.description ?? "",
@@ -62,15 +111,93 @@ export default function EventForm({ event }: EventFormProps) {
     time: event?.time ?? "",
     location: event?.location ?? "",
     parking_location: event?.parking_location ?? "",
-    price: event?.price ?? "",
-    entry_price: event?.entry_price ?? null,
     dress_code: event?.dress_code ?? "",
     max_participants: event?.max_participants ?? 20,
     max_per_email: event?.max_per_email ?? 5,
     survey_url: event?.survey_url ?? null,
+    cancellation_deadline: event?.cancellation_deadline ?? null,
   });
   const [submitting, setSubmitting] = useState(false);
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
+  const initialPrice = derivePriceState(event);
+  // Beim Anlegen ist Stripe der vorgesehene Weg; beim Bearbeiten richtet sich
+  // der Modus nach dem, was gespeichert ist.
+  const [priceMode, setPriceMode] = useState<PriceMode>(isEdit ? initialPrice.mode : "stripe");
+  const [priceCents, setPriceCents] = useState(initialPrice.cents);
+  const [priceText, setPriceText] = useState(initialPrice.text);
+  const [stripePriceId, setStripePriceId] = useState(initialPrice.stripeId);
+  // Nur eine erfolgreich geladene ID darf gespeichert werden – eine bloß
+  // getippte sagt nichts darüber aus, ob sie zum Betrag passt.
+  const [loadedStripePriceId, setLoadedStripePriceId] = useState(initialPrice.stripeId);
+  const [stripePriceLoading, setStripePriceLoading] = useState(false);
+  const [stripePriceError, setStripePriceError] = useState<string | null>(null);
+  const [childStripePriceId, setChildStripePriceId] = useState(event?.stripe_child_price_id ?? "");
+  const [childPrice, setChildPrice] = useState<{ id: string; amount: number } | null>(
+    event?.stripe_child_price_id && event.child_entry_price != null
+      ? { id: event.stripe_child_price_id, amount: event.child_entry_price }
+      : null
+  );
+  const [childPriceLoading, setChildPriceLoading] = useState(false);
+  const [childPriceError, setChildPriceError] = useState<string | null>(null);
+  const [childPriceMode, setChildPriceMode] = useState<PriceMode>(
+    event?.stripe_child_price_id ? "stripe" : event?.child_price ? "text" : event?.child_entry_price != null ? "amount" : "stripe"
+  );
+  const [childPriceCents, setChildPriceCents] = useState(centsFromAmount(event?.child_entry_price));
+  const [childPriceText, setChildPriceText] = useState(event?.child_price ?? "");
+  const childPriceReady = childPriceMode !== "stripe" || (!childPriceLoading && (
+    !childStripePriceId.trim() || childPrice?.id === childStripePriceId.trim()
+  ));
+
+  async function loadChildStripePrice() {
+    const id = childStripePriceId.trim();
+    if (!id || childPriceLoading) return;
+    setChildPriceLoading(true);
+    setChildPriceError(null);
+    setChildPrice(null);
+    try {
+      const res = await fetch(`/api/admin/stripe/price?kind=child&id=${encodeURIComponent(id)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Kinderpreis konnte nicht geladen werden.");
+      setChildPrice({ id: data.stripe_price_id, amount: data.unit_amount / 100 });
+      setChildPriceCents(data.unit_amount);
+    } catch (error) {
+      setChildPriceError(error instanceof Error ? error.message : "Kinderpreis konnte nicht geladen werden.");
+    } finally {
+      setChildPriceLoading(false);
+    }
+  }
+
+  const loadStripePrice = useCallback(async (priceId: string) => {
+    if (!priceId.trim()) {
+      setStripePriceError(null);
+      return;
+    }
+    setStripePriceLoading(true);
+    setStripePriceError(null);
+    try {
+      const res = await fetch(`/api/admin/stripe/price?id=${encodeURIComponent(priceId.trim())}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setStripePriceError(data.error || "Preis konnte nicht geladen werden.");
+        setLoadedStripePriceId("");
+        return;
+      }
+      // unit_amount ist Stripes Cent-Betrag – exakt unser internes Format
+      setPriceCents(data.unit_amount);
+      setLoadedStripePriceId(data.stripe_price_id);
+    } catch {
+      setStripePriceError("Verbindungsfehler beim Laden des Preises.");
+      setLoadedStripePriceId("");
+    } finally {
+      setStripePriceLoading(false);
+    }
+  }, []);
+
+  // Was am Ende in die DB geht – aus genau einer Quelle abgeleitet.
+  const priceFields = priceFieldsFor(priceMode, priceCents, priceText);
+  // Die ID gilt nur im Stripe-Modus; wer den Modus wechselt, verwirft sie.
+  const stripePriceIdToSave =
+    priceMode === "stripe" && priceFields.entry_price != null ? loadedStripePriceId : null;
 
   // ── Costs state (edit mode only, deferred save) ───────
   interface LocalCost { _key: string; id?: number; description: string; amount: number; }
@@ -218,12 +345,16 @@ export default function EventForm({ event }: EventFormProps) {
       category: tpl.category,
       description: tpl.description,
       location: tpl.location,
-      price: tpl.price,
-      entry_price: tpl.entry_price ?? null,
       dress_code: tpl.dress_code,
       max_participants: tpl.max_participants,
       max_per_email: tpl.max_per_email ?? 5,
     }));
+    const tplPrice = derivePriceState(tpl);
+    setPriceCents(tplPrice.cents);
+    setPriceText(tplPrice.text);
+    // Der Modus bleibt bewusst auf Stripe: Vorlagen gibt es nur beim Anlegen,
+    // und dort soll die Price ID immer der vorgesehene Weg sein.
+
     // Pre-fill images from template
     setImages(
       (tpl.images ?? []).map((img) => ({
@@ -244,6 +375,10 @@ export default function EventForm({ event }: EventFormProps) {
 
   const handleSubmit = async (e: React.FormEvent, publish: boolean) => {
     e.preventDefault();
+    if (!childPriceReady) {
+      toast("Bitte den Kinderpreis zuerst laden oder die Kinder-Preis-ID leeren.", "error");
+      return;
+    }
     setSubmitting(true);
 
     try {
@@ -257,7 +392,16 @@ export default function EventForm({ event }: EventFormProps) {
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...formData, images: imagePayload, publish }),
+        body: JSON.stringify({
+          ...formData,
+          ...priceFields,
+          stripe_price_id: stripePriceIdToSave,
+          stripe_child_price_id: childPriceMode === "stripe" ? childStripePriceId.trim() || null : null,
+          child_entry_price: childPriceMode === "stripe" ? null : amountFromCents(childPriceCents),
+          child_price: childPriceMode === "text" ? childPriceText.trim() || null : null,
+          images: imagePayload,
+          publish,
+        }),
       });
 
       const data = await res.json();
@@ -323,8 +467,8 @@ export default function EventForm({ event }: EventFormProps) {
           category: formData.category,
           description: formData.description,
           location: formData.location,
-          price: formData.price,
-          entry_price: formData.entry_price ?? null,
+          price: priceFields.price,
+          entry_price: priceFields.entry_price,
           dress_code: formData.dress_code,
           max_participants: formData.max_participants,
           template_costs: costs.map((c) => ({ description: c.description, amount: c.amount })),
@@ -477,32 +621,170 @@ export default function EventForm({ event }: EventFormProps) {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="price">Preis (Anzeige) *</Label>
-                <Input
-                  id="price"
-                  required
-                  value={formData.price}
-                  onChange={(e) => update("price", e.target.value)}
-                  placeholder='z.B. "Kostenlos", "5 €", "Spende"'
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="price_amount">Preis Erwachsene *</Label>
+                  <div className="inline-flex rounded-md border p-0.5 text-xs">
+                    {([
+                      ["stripe", "Stripe"],
+                      ["amount", "Betrag"],
+                      ["text", "Freitext"],
+                    ] as const).map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setPriceMode(mode)}
+                        className={`px-2 py-1 rounded ${priceMode === mode ? "bg-gray-900 text-white" : "text-muted-foreground"}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {priceMode === "stripe" && (
+                  <div className="flex gap-2">
+                    <Input
+                      value={stripePriceId}
+                      onChange={(e) => setStripePriceId(e.target.value)}
+                      onBlur={() => loadStripePrice(stripePriceId)}
+                      placeholder="price_1AbCdEfGhIjKlMnO"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={stripePriceLoading || !stripePriceId.trim()}
+                      onClick={() => loadStripePrice(stripePriceId)}
+                    >
+                      {stripePriceLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Laden"}
+                    </Button>
+                  </div>
+                )}
+                {stripePriceError && <p className="text-xs text-red-600">{stripePriceError}</p>}
+
+                {priceMode === "text" && (
+                  <Input
+                    id="price_text"
+                    value={priceText}
+                    onChange={(e) => setPriceText(e.target.value)}
+                    placeholder='z.B. "Spende willkommen"'
+                  />
+                )}
+
+                {priceMode === "text" && (
+                  <Label htmlFor="price_amount" className="text-xs font-normal text-muted-foreground">
+                    Berechnungsgrundlage pro Person (optional)
+                  </Label>
+                )}
+                <AmountInput
+                  id="price_amount"
+                  value={priceCents}
+                  onChange={setPriceCents}
+                  disabled={priceMode === "stripe"}
+                  aria-describedby="price_preview"
                 />
+
+                <p id="price_preview" className="text-xs text-muted-foreground">
+                  {priceMode === "amount" && <>Ziffern rücken von rechts nach – 500 ergibt 5,00 €.{" "}</>}
+                  Teilnehmer sehen:{" "}
+                  <span className="font-medium text-foreground">{priceFields.price}</span>
+                  {priceFields.entry_price == null ? (
+                    <> · keine Umsatzberechnung</>
+                  ) : priceFields.price !== formatEuro(priceFields.entry_price) ? (
+                    <> · gerechnet wird mit {formatEuro(priceFields.entry_price)}</>
+                  ) : null}
+                </p>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="entry_price">Eintrittspreis (€, für Umsatzberechnung)</Label>
-                <div className="relative">
-                  <Euro className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    id="entry_price"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={formData.entry_price ?? ""}
-                    onChange={(e) => update("entry_price", e.target.value === "" ? null : parseFloat(e.target.value))}
-                    placeholder="0,00 – leer lassen wenn kostenlos"
-                    className="pl-9"
-                  />
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="child_price_amount">Preis Kinder</Label>
+                  <div className="inline-flex rounded-md border p-0.5 text-xs">
+                    {([
+                      ["stripe", "Stripe"],
+                      ["amount", "Betrag"],
+                      ["text", "Freitext"],
+                    ] as const).map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        disabled={childPriceLoading || submitting}
+                        onClick={() => setChildPriceMode(mode)}
+                        className={`px-2 py-1 rounded ${childPriceMode === mode ? "bg-gray-900 text-white" : "text-muted-foreground"}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <p className="text-xs text-muted-foreground">Wird für die automatische Umsatz- und Bilanzberechnung verwendet.</p>
+                {childPriceMode === "stripe" && <div className="flex gap-2">
+                  <Input
+                    id="child_stripe_price_id"
+                    aria-label="Stripe-Preis-ID für Kinder"
+                    value={childStripePriceId}
+                    disabled={childPriceLoading || submitting}
+                    onChange={(e) => {
+                      setChildStripePriceId(e.target.value);
+                      setChildPrice(null);
+                      setChildPriceError(null);
+                    }}
+                    placeholder="price_1AbCdEfGhIjKlMnO"
+                    aria-describedby="child_price_preview"
+                    aria-invalid={!!childPriceError}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={childPriceLoading || submitting || !childStripePriceId.trim()}
+                    onClick={loadChildStripePrice}
+                  >
+                    {childPriceLoading ? <Loader2 className="w-4 h-4 animate-spin" aria-label="Kinderpreis wird geladen" /> : "Laden"}
+                  </Button>
+                </div>}
+                {childPriceMode === "stripe" && childPriceError && <p className="text-xs text-red-600">{childPriceError}</p>}
+                {childPriceMode === "text" && (
+                  <>
+                    <Input
+                      id="child_price_text"
+                      aria-label="Kinderpreis als Freitext"
+                      value={childPriceText}
+                      onChange={(e) => setChildPriceText(e.target.value)}
+                      maxLength={100}
+                      placeholder='z.B. "Kinderbeitrag"'
+                    />
+                    <Label htmlFor="child_price_amount" className="text-xs font-normal text-muted-foreground">
+                      Fester Betrag pro Kind für den Checkout
+                    </Label>
+                  </>
+                )}
+                <AmountInput
+                  id="child_price_amount"
+                  value={childPriceMode === "stripe"
+                    ? centsFromAmount(childPrice?.amount ?? (!childStripePriceId.trim() ? priceFields.entry_price : null))
+                    : childPriceCents}
+                  onChange={setChildPriceCents}
+                  disabled={childPriceMode === "stripe"}
+                  aria-describedby="child_price_preview"
+                />
+                <div id="child_price_preview" className="text-xs" aria-live="polite">
+                  {childPriceMode !== "stripe" ? (
+                    <p className="text-muted-foreground">
+                      Teilnehmer sehen:{" "}
+                      <span className="font-medium text-foreground">
+                        {childPriceMode === "text" && childPriceText.trim() && parsePriceText(childPriceText) == null
+                          ? `${childPriceText.trim()} (${formatEuro(amountFromCents(childPriceCents))})`
+                          : formatEuro(amountFromCents(childPriceCents))}
+                      </span>
+                      {childPriceCents === 0 ? " · kostenlos" : " pro Kind"}
+                    </p>
+                  ) : childPrice ? (
+                    <p className="font-medium">Kinder: {formatEuro(childPrice.amount)}{childPrice.amount === 0 ? " · kostenlos" : " pro Person"}</p>
+                  ) : childStripePriceId.trim() ? (
+                    <p className="text-muted-foreground">{childPriceLoading ? "Kinderpreis wird geladen …" : "Bitte den Kinderpreis vor dem Speichern laden."}</p>
+                  ) : (
+                    <p className="text-muted-foreground">Ohne Kinder-Preis-ID gilt der Erwachsenenpreis.</p>
+                  )}
+                  {childPriceMode === "stripe" && <p className="text-muted-foreground mt-1">Für kostenlose Kinder eine Stripe-Preis-ID mit 0 € hinterlegen.</p>}
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -525,6 +807,29 @@ export default function EventForm({ event }: EventFormProps) {
                   value={formData.max_participants}
                   onChange={(e) => update("max_participants", parseInt(e.target.value) || 1)}
                 />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="cancellation_deadline">Stornofrist</Label>
+                <Input
+                  id="cancellation_deadline"
+                  type="datetime-local"
+                  // Nach dem Beginn nimmt die Regel die Frist ohnehin nicht an
+                  // – der Browser soll das gleich sagen, nicht erst der Server.
+                  max={
+                    formData.date && formData.time
+                      ? `${formData.date}T${formData.time}`
+                      : undefined
+                  }
+                  value={formData.cancellation_deadline ?? ""}
+                  onChange={(e) =>
+                    update("cancellation_deadline", e.target.value || null)
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  Bis wann darf storniert werden? Muss vor dem Beginn liegen.
+                  Leer lassen für den Standard: 24 Stunden vor Beginn.
+                </p>
               </div>
 
               <div className="space-y-2">

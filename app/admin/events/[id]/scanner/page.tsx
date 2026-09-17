@@ -16,6 +16,8 @@ import {
   RefreshCw,
   CheckCircle2,
 } from "lucide-react";
+import ChildBadge from "@/components/ChildBadge";
+import PaidBadge from "@/components/PaidBadge";
 import type { RegistrationPerson } from "@/lib/types";
 
 interface ScanError {
@@ -30,6 +32,8 @@ interface ScanPreview {
   email: string | null;
   is_walk_in: boolean;
   checked_in_at: string | null;
+  /** Zeitpunkt der Zahlung – null heißt offen. */
+  paid_at: string | null;
   persons: RegistrationPerson[];
   token: string;
 }
@@ -397,6 +401,8 @@ export default function ScannerPage() {
                         Walk-in
                       </span>
                     )}
+                    {/* Nur wenn es stimmt – keine Markierung heißt offen. */}
+                    {preview.paid_at && <PaidBadge paid dark className="text-xs px-2" />}
                   </div>
                   {preview.email && (
                     <p className="text-sm text-gray-400 mt-0.5 truncate">{preview.email}</p>
@@ -437,6 +443,7 @@ export default function ScannerPage() {
                       <div className="min-w-0">
                         <p className={`text-sm font-medium ${isChecked ? "text-green-200" : "text-white"}`}>
                           {person.first_name} {person.last_name}
+                          {person.is_child && <ChildBadge dark className="ml-1.5 align-middle" />}
                           {idx === 0 && (
                             <span className="ml-1.5 text-xs text-gray-500 font-normal">(Hauptperson)</span>
                           )}

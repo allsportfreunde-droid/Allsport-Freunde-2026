@@ -1,4 +1,5 @@
 import { getSQL } from "./utils";
+import { personRevenueSql } from "./person-revenue";
 import type { EventCost, EventDonation, EventFinancials } from "../types";
 
 export async function getEventCosts(eventId: number): Promise<EventCost[]> {
@@ -102,22 +103,26 @@ export async function getEventFinancials(eventId: number): Promise<EventFinancia
 
   // Entry price + cash count (columns may not exist if migration not run yet)
   let entryPrice: number | null = null;
+  let childEntryPrice: number | null = null;
   let cashCounted: number | null = null;
   let cashCountedAt: string | null = null;
   try {
     const eventRows = await sql`
       SELECT
         entry_price::float8    AS entry_price,
+        child_entry_price::float8 AS child_entry_price,
         cash_counted::float8   AS cash_counted,
         cash_counted_at
       FROM events WHERE id = ${eventId}
     `;
     const row = eventRows[0] as {
       entry_price: number | null;
+      child_entry_price: number | null;
       cash_counted: number | null;
       cash_counted_at: string | null;
     } | undefined;
     entryPrice    = row?.entry_price   ?? null;
+    childEntryPrice = row?.child_entry_price ?? null;
     cashCounted   = row?.cash_counted  ?? null;
     cashCountedAt = row?.cash_counted_at ? String(row.cash_counted_at) : null;
   } catch {
@@ -137,29 +142,33 @@ export async function getEventFinancials(eventId: number): Promise<EventFinancia
   const approvedRows = await sql`
     SELECT
       COUNT(DISTINCT r.id)::int AS registrations,
-      COUNT(rp.id)::int AS persons
+      COUNT(rp.id)::int AS persons,
+      COALESCE(SUM(${personRevenueSql(sql)}), 0)::float8 AS revenue
     FROM registrations r
+    JOIN events e ON e.id = r.event_id
     JOIN registration_persons rp ON rp.registration_id = r.id AND rp.cancelled_at IS NULL
     WHERE r.event_id = ${eventId} AND r.status = 'approved'
   `;
   const approvedCount = (approvedRows[0] as { registrations: number; persons: number }).registrations;
   const approvedPersons = (approvedRows[0] as { registrations: number; persons: number }).persons;
   const approvedGuests = Math.max(0, approvedPersons - approvedCount);
-  const expectedRevenue = entryPrice != null ? approvedPersons * entryPrice : 0;
+  const expectedRevenue = (approvedRows[0] as { revenue: number }).revenue;
 
   // Checked-in persons (actual revenue) — count via registration_persons
   const checkinRows = await sql`
     SELECT
       COUNT(DISTINCT r.id)::int AS registrations,
-      COUNT(rp.id)::int AS persons
+      COUNT(rp.id)::int AS persons,
+      COALESCE(SUM(${personRevenueSql(sql)}), 0)::float8 AS revenue
     FROM registrations r
+    JOIN events e ON e.id = r.event_id
     JOIN registration_persons rp ON rp.registration_id = r.id AND rp.cancelled_at IS NULL AND rp.checked_in_at IS NOT NULL
     WHERE r.event_id = ${eventId} AND r.status = 'approved'
   `;
   const checkinCount = (checkinRows[0] as { registrations: number; persons: number }).registrations;
   const checkinPersons = (checkinRows[0] as { registrations: number; persons: number }).persons;
   const checkinGuests = Math.max(0, checkinPersons - checkinCount);
-  const actualRevenue = entryPrice != null ? checkinPersons * entryPrice : 0;
+  const actualRevenue = (checkinRows[0] as { revenue: number }).revenue;
 
   // Donations (table may not exist if migration not run yet)
   let donations: EventDonation[] = [];
@@ -172,6 +181,7 @@ export async function getEventFinancials(eventId: number): Promise<EventFinancia
 
   return {
     entry_price: entryPrice,
+    child_entry_price: childEntryPrice,
     total_costs: totalCosts,
     approved_persons: approvedPersons,
     approved_guests: approvedGuests,

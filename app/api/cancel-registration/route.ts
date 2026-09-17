@@ -1,10 +1,10 @@
 import {
   getCancellationTokenInfo,
-  markCancellationTokenUsed,
-  cancelRegistrationById,
+  cancelRegistrationByCancellationToken,
 } from "@/lib/db";
-import { sendRegistrationCancelledEmail } from "@/lib/email";
+import { refundAndNotifyCancellation } from "@/lib/cancellation-refund";
 import { NextRequest, NextResponse } from "next/server";
+import { CancellationBlockedError } from "@/lib/cancellation";
 
 // GET /api/cancel-registration?token=xxx
 // Returns preview data so the page can show name + event before confirming.
@@ -53,29 +53,14 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const info = await getCancellationTokenInfo(token);
-    if (!info) {
-      return NextResponse.json({ status: "not_found" }, { status: 404 });
+    const result = await cancelRegistrationByCancellationToken(token);
+    if (result.status !== 'cancelled') {
+      return NextResponse.json({ status: result.status }, { status: result.status === 'not_found' ? 404 : 200 });
     }
-
-    if (info.usedAt !== null || info.registrationStatus === "cancelled") {
-      return NextResponse.json({ status: "already_cancelled" });
-    }
-
-    if (new Date(info.expiresAt) <= new Date()) {
-      return NextResponse.json({ status: "expired" });
-    }
-
-    // Atomically mark the token as used (prevents double-cancel race)
-    const marked = await markCancellationTokenUsed(token);
-    if (!marked) {
-      return NextResponse.json({ status: "already_cancelled" });
-    }
-
-    await cancelRegistrationById(info.registrationId);
+    const { info } = result;
 
     if (info.email) {
-      sendRegistrationCancelledEmail({
+      await refundAndNotifyCancellation(info.registrationId, {
         to: info.email,
         firstName: info.firstName,
         lastName: info.lastName,
@@ -93,6 +78,9 @@ export async function POST(request: NextRequest) {
       statusToken: info.statusToken,
     });
   } catch (error) {
+    if (error instanceof CancellationBlockedError) {
+      return NextResponse.json({ status: "deadline_passed", reason: error.message });
+    }
     console.error("Fehler beim Stornieren via Token:", error);
     return NextResponse.json({ error: "Ein Fehler ist aufgetreten." }, { status: 500 });
   }

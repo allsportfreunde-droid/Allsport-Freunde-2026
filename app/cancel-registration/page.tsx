@@ -34,7 +34,9 @@ function CancelRegistrationContent() {
   const [preview, setPreview] = useState<PreviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
-  const [cancelResult, setCancelResult] = useState<"cancelled" | "already_cancelled" | "expired" | null>(null);
+  const [cancelResult, setCancelResult] = useState<"cancelled" | "already_cancelled" | "expired" | "deadline_passed" | null>(null);
+  // Begründung der API – benennt die Frist oder den bereits erfolgten Beginn.
+  const [blockedReason, setBlockedReason] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -65,6 +67,9 @@ function CancelRegistrationContent() {
         setCancelResult("already_cancelled");
       } else if (data.status === "expired") {
         setCancelResult("expired");
+      } else if (data.status === "deadline_passed") {
+        setBlockedReason(typeof data.reason === "string" ? data.reason : null);
+        setCancelResult("deadline_passed");
       } else {
         setError("Ein Fehler ist aufgetreten. Bitte versuche es erneut.");
       }
@@ -104,6 +109,21 @@ function CancelRegistrationContent() {
         <div className="text-center max-w-sm">
           <h1 className="text-xl font-bold text-gray-900 mb-2">Bereits abgesagt</h1>
           <p className="text-gray-500 text-sm">Du hast deine Anmeldung bereits abgesagt.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (cancelResult === "deadline_passed") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+        <div className="text-center max-w-sm">
+          <h1 className="text-xl font-bold text-gray-900 mb-2">Absage nicht mehr möglich</h1>
+          <p className="text-gray-500 text-sm">
+            {blockedReason ??
+              "Die Stornofrist für diese Veranstaltung ist abgelaufen."}{" "}
+            Melde dich bitte direkt bei uns, wenn du nicht teilnehmen kannst.
+          </p>
         </div>
       </div>
     );

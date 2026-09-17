@@ -7,6 +7,7 @@ import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import StatusBadge from "@/components/status/StatusBadge";
+import ChildBadge from "@/components/ChildBadge";
 import { Loader2, Search, CheckCircle2, User } from "lucide-react";
 import type { EventPerson } from "@/lib/types";
 
@@ -118,6 +119,7 @@ export default function PersonsTable({ eventId }: PersonsTableProps) {
                           <span className="font-medium">
                             {p.first_name} {p.last_name}
                           </span>
+                          {p.is_child && <ChildBadge className="ml-1" />}
                           {p.is_walk_in && (
                             <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 leading-none">
                               Walk-in
@@ -168,6 +170,7 @@ export default function PersonsTable({ eventId }: PersonsTableProps) {
                   <div className="min-w-0">
                     <p className="font-medium text-gray-900 text-sm">
                       {p.first_name} {p.last_name}
+                      {p.is_child && <ChildBadge className="ml-1" />}
                       {p.is_walk_in && (
                         <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 leading-none">
                           Walk-in

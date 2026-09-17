@@ -44,6 +44,7 @@ export async function PATCH(request: NextRequest) {
     // Fire-and-forget emails
     for (const reg of regsBefore) {
       if (!reg) continue;
+      if (results.find(result => result.id === reg.id)?.status_changed === false) continue;
       const event = await getEvent(reg.event_id);
       if (!event || !reg.email) continue;
 

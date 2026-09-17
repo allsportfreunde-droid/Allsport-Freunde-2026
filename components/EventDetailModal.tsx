@@ -18,9 +18,11 @@ import {
   Copy,
   Check,
   MessageSquare,
+  Share2,
 } from "lucide-react";
 import type { EventWithRegistrations } from "@/lib/types";
 import ImageCarousel from "./ImageCarousel";
+import { formatEventPrice } from "@/lib/price";
 
 // Leaflet must only run client-side (no SSR)
 const LeafletMap = dynamic(() => import("./LeafletMap"), { ssr: false });
@@ -65,6 +67,7 @@ export default function EventDetailModal({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [copiedLocation, setCopiedLocation] = useState(false);
   const [copiedParking, setCopiedParking] = useState(false);
+  const [copiedShare, setCopiedShare] = useState(false);
 
   // Lock body scroll when modal is open
   useEffect(() => {
@@ -108,6 +111,25 @@ export default function EventDetailModal({
   const percentage = event.occupancy_percentage ?? 0;
   const bookedPercentage = percentage;
   const hasImages = (event.images?.length ?? 0) > 0;
+
+  // Teilen: auf dem Handy die System-Auswahl (WhatsApp, Signal, …),
+  // am Desktop fällt es auf "Link kopieren" zurück.
+  const handleShare = async () => {
+    const url = `${window.location.origin}/events/${event.id}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: event.title,
+          text: `${event.title} – ${formatDate(event.date)}, ${event.time} Uhr`,
+          url,
+        });
+      } catch {
+        // Abbruch durch den Nutzer – nichts weiter tun.
+      }
+      return;
+    }
+    copyToClipboard(url, setCopiedShare);
+  };
 
   return (
     <AnimatePresence>
@@ -268,7 +290,7 @@ export default function EventDetailModal({
                   <InfoBlock
                     icon={<Euro className="w-4 h-4 text-amber-600" />}
                     label="Kosten"
-                    value={event.price}
+                    value={formatEventPrice(event)}
                   />
                   {event.dress_code && (
                     <InfoBlock
@@ -328,6 +350,18 @@ export default function EventDetailModal({
                     }}
                   >
                     {isFull ? "In die Warteliste einschreiben" : "Jetzt anmelden"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-12"
+                    onClick={handleShare}
+                  >
+                    {copiedShare ? (
+                      <Check className="w-4 h-4 mr-2 text-green-600" />
+                    ) : (
+                      <Share2 className="w-4 h-4 mr-2" />
+                    )}
+                    {copiedShare ? "Link kopiert" : "Teilen"}
                   </Button>
                   <Button
                     variant="outline"

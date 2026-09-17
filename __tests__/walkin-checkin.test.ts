@@ -97,7 +97,16 @@ describe("createWalkInRegistration", () => {
       checked_in_by: "admin@example.com",
     });
 
-    expect(result).toEqual({ id: 42, alreadyExists: false });
+    expect(result).toEqual({
+      id: 42,
+      status_token: expect.any(String),
+      alreadyExists: false,
+    });
+
+    // Der zurückgegebene Token ist derselbe, unter dem die Anmeldung
+    // gespeichert wurde – die Walk-in-Mail verlinkt damit die Status-Seite.
+    const regInsert = recorded.find((q) => q.text.includes("INSERT INTO registrations"));
+    expect(regInsert?.values).toContain(result.status_token);
 
     const inserts = personInserts();
     expect(inserts).toHaveLength(2);
@@ -106,8 +115,40 @@ describe("createWalkInRegistration", () => {
       expect(insert.text).toContain("NOW()");
       expect(insert.text).not.toContain("NULL");
     }
-    expect(inserts[0].values).toEqual([42, "Ali", "Yilmaz"]);
-    expect(inserts[1].values).toEqual([42, "Ayse", "Yilmaz"]);
+    expect(inserts[0].values).toEqual([42, "Ali", "Yilmaz", false]);
+    expect(inserts[1].values).toEqual([42, "Ayse", "Yilmaz", false]);
+  });
+
+  it("schreibt die Kind-Kennzeichnung pro Person mit", async () => {
+    await createWalkInRegistration({
+      event_id: 7,
+      persons: [
+        { firstName: "Ali", lastName: "Yilmaz", isChild: false },
+        { firstName: "Ayse", lastName: "Yilmaz", isChild: true },
+      ],
+      email: "ali@example.com",
+      phone: null,
+      notes: null,
+      checked_in_by: null,
+    });
+
+    const inserts = personInserts();
+    expect(inserts[0].text).toContain("is_child");
+    expect(inserts[0].values).toEqual([42, "Ali", "Yilmaz", false]);
+    expect(inserts[1].values).toEqual([42, "Ayse", "Yilmaz", true]);
+  });
+
+  it("behandelt eine fehlende Kind-Angabe als Erwachsenen", async () => {
+    await createWalkInRegistration({
+      event_id: 7,
+      persons: [{ firstName: "Ali", lastName: "Yilmaz" }],
+      email: "ali@example.com",
+      phone: null,
+      notes: null,
+      checked_in_by: null,
+    });
+
+    expect(personInserts()[0].values).toEqual([42, "Ali", "Yilmaz", false]);
   });
 
   it("lässt Personen bei Self-Service-Walk-ins ohne Check-In-Zeitstempel", async () => {
@@ -138,7 +179,7 @@ describe("createWalkInRegistration", () => {
       checked_in_by: "admin@example.com",
     });
 
-    expect(result).toEqual({ id: 5, alreadyExists: true });
+    expect(result).toEqual({ id: 5, status_token: "tok", alreadyExists: true });
     expect(personInserts()).toHaveLength(0);
   });
 });

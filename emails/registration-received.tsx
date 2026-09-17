@@ -17,6 +17,10 @@ interface Props {
   eventTime: string;
   eventLocation: string;
   statusUrl: string;
+  /** z. B. "3 × 8,00 € = 24,00 €" – fehlt bei kostenlosen Events */
+  priceLabel?: string;
+  /** z. B. "15.09.2026 um 12:00 Uhr" */
+  cancellationLabel?: string;
   persons?: Array<{ firstName: string; lastName: string }>;
 }
 
@@ -28,6 +32,8 @@ export function RegistrationReceivedEmail({
   eventLocation,
   statusUrl,
   persons,
+  priceLabel,
+  cancellationLabel,
 }: Props) {
   return (
     <Html lang="de">
@@ -40,8 +46,30 @@ export function RegistrationReceivedEmail({
           </Text>
           <Text style={text}>
             vielen Dank für deine Anmeldung zu <strong>{eventTitle}</strong>!
-            Deine Anmeldung ist bei uns eingegangen und wird nun geprüft.
+            Dein Platz ist reserviert.
           </Text>
+          <Text style={text}>
+            {priceLabel
+              ? "Damit deine Anmeldung verbindlich wird, fehlt nur noch der Teilnahmebetrag."
+              : "Deine Anmeldung ist bei uns eingegangen und wird nun geprüft."}
+          </Text>
+          {priceLabel && (
+            <Section style={payBox}>
+              <Text style={payHeading}>Offener Teilnahmebetrag</Text>
+              <Text style={payAmount}>{priceLabel}</Text>
+              <Text style={payText}>
+                Nach erfolgreicher Zahlung erhältst du deine Bestätigung mit
+                Check-In QR-Code per E-Mail. Bei SEPA-Lastschrift bestätigen wir
+                deine Teilnahme bereits, sobald der Einzug gestartet wurde.
+                {cancellationLabel
+                  ? ` Nach der Zahlung oder dem Start des SEPA-Einzugs kannst du bis ${cancellationLabel} stornieren.`
+                  : ""}
+              </Text>
+              <Link href={statusUrl} style={payButton}>
+                Jetzt bezahlen
+              </Link>
+            </Section>
+          )}
           <Section style={infoBox}>
             <Text style={infoText}>
               <strong>Event:</strong> {eventTitle}
@@ -181,6 +209,47 @@ const cancelButton: React.CSSProperties = {
   fontSize: "14px",
   fontWeight: "bold",
   padding: "10px 20px",
+  textDecoration: "none",
+  textAlign: "center" as const,
+};
+
+const payBox: React.CSSProperties = {
+  backgroundColor: "#f0fdf4",
+  borderRadius: "8px",
+  padding: "16px 20px",
+  margin: "24px 0 8px",
+  borderLeft: "4px solid #16a34a",
+};
+
+const payHeading: React.CSSProperties = {
+  fontSize: "14px",
+  fontWeight: "bold",
+  color: "#166534",
+  margin: "0 0 4px 0",
+};
+
+const payAmount: React.CSSProperties = {
+  fontSize: "18px",
+  fontWeight: "bold",
+  color: "#14532d",
+  margin: "0 0 6px 0",
+};
+
+const payText: React.CSSProperties = {
+  fontSize: "13px",
+  lineHeight: "20px",
+  color: "#166534",
+  margin: "0 0 12px 0",
+};
+
+const payButton: React.CSSProperties = {
+  backgroundColor: "#16a34a",
+  borderRadius: "6px",
+  color: "#ffffff",
+  display: "inline-block",
+  fontSize: "15px",
+  fontWeight: "bold",
+  padding: "12px 24px",
   textDecoration: "none",
   textAlign: "center" as const,
 };

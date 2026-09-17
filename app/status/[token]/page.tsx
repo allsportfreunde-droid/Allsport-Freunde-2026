@@ -11,20 +11,69 @@ export default function StatusPageRoute() {
   const searchParams = useSearchParams();
   const token = params.token as string;
   const justCancelled = searchParams.get("cancelled") === "true";
+  // Beschreibt nur den Rückkehrweg von Stripe. Der Zahlungsstatus kommt aus der API.
+  const zahlung = searchParams.get("zahlung");
+  const paymentResult = zahlung === "erfolg" || zahlung === "abbruch" ? zahlung : null;
+  const sessionId = searchParams.get("session_id");
   const [info, setInfo] = useState<RegistrationStatusInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/status/${token}`)
-      .then((r) => {
-        if (!r.ok) throw new Error();
-        return r.json();
-      })
-      .then(setInfo)
-      .catch(() => setError(true))
-      .finally(() => setLoading(false));
-  }, [token]);
+    const controller = new AbortController();
+    const { signal } = controller;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let currentInfo: RegistrationStatusInfo | null = null;
+    setLoading(true);
+    setError(false);
+
+    async function load() {
+      let synchronized = false;
+      let retry = true;
+      // Auch ohne Stripe-Rückkehrlink verwaiste Anlagen wiederaufnehmen.
+      // Wiederholungen erreichen ebenso Sperren, die erst später ablaufen.
+      try {
+        const confirmation = await fetch("/api/checkout/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status_token: token, ...(sessionId ? { session_id: sessionId } : {}) }),
+          signal,
+        });
+        synchronized = confirmation.ok;
+      } catch {
+        // Der gespeicherte Stand wird trotzdem geladen; unklare Zahlungen
+        // bleiben bis zum nächsten erfolgreichen Abgleich gesperrt.
+      }
+      if (signal.aborted) return;
+
+      try {
+        const res = await fetch(`/api/status/${token}`, { cache: "no-store", signal });
+        if (!res.ok) throw new Error();
+        const nextInfo: RegistrationStatusInfo = await res.json();
+        if (signal.aborted) return;
+        if (!synchronized && !nextInfo.paid_at && nextInfo.payment_state !== "paid" && nextInfo.payment_state !== "processing") {
+          nextInfo.payment_state = "checking";
+        }
+        currentInfo = nextInfo;
+        setInfo(nextInfo);
+        setError(false);
+        retry = nextInfo.payment_state === "checking" || nextInfo.payment_state === "processing";
+      } catch {
+        if (!signal.aborted && !currentInfo) setError(true);
+      } finally {
+        if (!signal.aborted) {
+          setLoading(false);
+          // Erst nach Abschluss beider Requests planen, damit nichts überlappt.
+          if (retry) timer = setTimeout(load, 5000);
+        }
+      }
+    }
+    void load();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [token, sessionId]);
 
   if (loading) {
     return (
@@ -45,5 +94,5 @@ export default function StatusPageRoute() {
     );
   }
 
-  return <StatusPage info={info} justCancelled={justCancelled} />;
+  return <StatusPage info={info} justCancelled={justCancelled} paymentResult={paymentResult} />;
 }

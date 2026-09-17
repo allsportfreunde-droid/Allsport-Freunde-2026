@@ -17,6 +17,12 @@ interface Props {
   eventTime: string;
   eventLocation: string;
   statusUrl: string;
+  /** Namen der jetzt abgemeldeten Personen (leer = ganze Anmeldung) */
+  cancelledPersons?: string[];
+  /** Personen, die weiterhin angemeldet bleiben (>0 = Teilstornierung) */
+  remainingPersons?: number;
+  /** Fertig formatierter Erstattungsbetrag, z. B. "8,00 €" (null = keine Erstattung) */
+  refundLabel?: string | null;
 }
 
 export function RegistrationCancelledEmail({
@@ -26,19 +32,55 @@ export function RegistrationCancelledEmail({
   eventTime,
   eventLocation,
   statusUrl,
+  cancelledPersons,
+  remainingPersons = 0,
+  refundLabel,
 }: Props) {
+  // Bleiben Personen angemeldet, ist nur ein Teil storniert. Dann darf die
+  // E-Mail nicht "deine Anmeldung wurde storniert" sagen – der Rest der
+  // Anmeldung steht weiterhin, und genau das muss unmissverständlich sein.
+  const partial = remainingPersons > 0;
+  const names = cancelledPersons?.filter(Boolean) ?? [];
+
   return (
     <Html lang="de">
       <Head />
       <Body style={main}>
         <Container style={container}>
-          <Text style={heading}>Anmeldung storniert</Text>
+          <Text style={heading}>
+            {partial ? "Abmeldung bestätigt" : "Anmeldung storniert"}
+          </Text>
           <Text style={text}>
             Assalamu Alaikum {firstName},
           </Text>
-          <Text style={text}>
-            deine Anmeldung zu <strong>{eventTitle}</strong> wurde erfolgreich storniert.
-          </Text>
+          {partial ? (
+            <Text style={text}>
+              {names.length === 1
+                ? `${names[0]} wurde von `
+                : `${names.join(", ")} wurden von `}
+              <strong>{eventTitle}</strong> abgemeldet. Die übrigen{" "}
+              {remainingPersons === 1 ? "Person bleibt" : `${remainingPersons} Personen bleiben`}{" "}
+              weiterhin angemeldet.
+            </Text>
+          ) : (
+            <Text style={text}>
+              deine Anmeldung zu <strong>{eventTitle}</strong> wurde erfolgreich storniert.
+            </Text>
+          )}
+          {refundLabel && (
+            <Section style={refundBox}>
+              <Text style={refundHeading}>Erstattung: {refundLabel}</Text>
+              <Text style={refundText}>
+                {partial && names.length > 0
+                  ? `Erstattet wird der Anteil für ${
+                      names.length === 1 ? names[0] : `${names.length} Personen`
+                    }.`
+                  : "Erstattet wird der vollständige Betrag deiner Anmeldung."}{" "}
+                Das Geld geht auf dem Weg zurück, mit dem du bezahlt hast. Bis es
+                auf deinem Konto sichtbar ist, können einige Werktage vergehen.
+              </Text>
+            </Section>
+          )}
           <Section style={infoBox}>
             <Text style={infoText}>
               <strong>Event:</strong> {eventTitle}
@@ -51,7 +93,9 @@ export function RegistrationCancelledEmail({
             </Text>
           </Section>
           <Text style={text}>
-            Du kannst den Status deiner Stornierung hier einsehen:
+            {partial
+              ? "Deine Anmeldung kannst du hier einsehen:"
+              : "Du kannst den Status deiner Stornierung hier einsehen:"}
           </Text>
           <Link href={statusUrl} style={button}>
             Status ansehen
@@ -106,6 +150,28 @@ const infoText: React.CSSProperties = {
   lineHeight: "22px",
   color: "#333333",
   margin: "4px 0",
+};
+
+const refundBox: React.CSSProperties = {
+  backgroundColor: "#ecfdf5",
+  border: "1px solid #a7f3d0",
+  borderRadius: "8px",
+  padding: "16px 20px",
+  margin: "16px 0",
+};
+
+const refundHeading: React.CSSProperties = {
+  fontSize: "16px",
+  fontWeight: "bold",
+  color: "#065f46",
+  margin: "0 0 4px",
+};
+
+const refundText: React.CSSProperties = {
+  fontSize: "14px",
+  lineHeight: "22px",
+  color: "#065f46",
+  margin: 0,
 };
 
 const button: React.CSSProperties = {

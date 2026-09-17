@@ -1,6 +1,7 @@
 import { getTemplate, updateTemplate, deleteTemplate, touchTemplate } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import type { EventTemplateInput } from "@/lib/types";
+import { normalizePrice } from "@/lib/price";
 
 export async function GET(
   _request: NextRequest,
@@ -31,18 +32,19 @@ export async function PUT(
     if (!body.name?.trim()) {
       return NextResponse.json({ error: "Bitte gib einen Vorlagennamen an." }, { status: 400 });
     }
-    if (!body.title?.trim() || !body.category || !body.location?.trim() || !body.price?.trim() || !body.max_participants) {
+    if (!body.title?.trim() || !body.category || !body.location?.trim() || !body.max_participants) {
       return NextResponse.json({ error: "Bitte fülle alle Pflichtfelder aus." }, { status: 400 });
     }
 
+    const price = normalizePrice(body);
     await updateTemplate(tplId, {
       name: body.name.trim(),
       title: body.title.trim(),
       category: body.category,
       description: (body.description || "").trim(),
       location: body.location.trim(),
-      price: body.price.trim(),
-      entry_price: typeof body.entry_price === "number" ? body.entry_price : null,
+      price: price.price,
+      entry_price: price.entry_price,
       dress_code: (body.dress_code || "").trim(),
       max_participants: body.max_participants,
       images: Array.isArray(body.images) ? body.images : undefined,
