@@ -529,6 +529,7 @@ export default function RegistrationTable({
                         {r.child_count > 0 && <ChildBadge count={r.child_count} />}
                       </span>
                     </TableCell>
+                    <TableCell className="hidden lg:table-cell">{Math.max(0, r.person_count - 1)}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5">
                         <StatusBadge status={r.status || "pending"} />
