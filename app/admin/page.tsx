@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import StatsCards from "@/components/admin/StatsCards";
+import TodayEvents from "@/components/admin/TodayEvents";
 import RecentRegistrations from "@/components/admin/RecentRegistrations";
 import { Plus, CalendarDays, Users } from "lucide-react";
 
@@ -12,7 +12,7 @@ export default function AdminDashboard() {
         <p className="text-muted-foreground mt-1">Übersicht über deinen Verein</p>
       </div>
 
-      <StatsCards />
+      <TodayEvents />
 
       <div className="flex flex-wrap gap-3">
         <Link href="/admin/events/new">

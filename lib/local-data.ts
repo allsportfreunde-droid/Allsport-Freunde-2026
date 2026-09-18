@@ -1,3 +1,4 @@
+import { personRevenueCents } from "./finance";
 import type {
   EventWithRegistrations,
   Registration,
@@ -13,22 +14,24 @@ import type {
   EventImage,
   EventImageInput,
   EventPerson,
+  CheckoutInfo,
 } from "./types";
+import { toPublicEvent } from "./types";
 
 const NOW = new Date().toISOString();
 const seedEvents: EventWithRegistrations[] = [
   { id: 1, title: "Freundschaftskick im Park", category: "fussball", description: "Lockeres Fußballspiel für alle Altersgruppen. Kommt vorbei und kickt mit!", date: "2026-04-12", time: "15:00", location: "Sportpark am Main, Frankfurt", parking_location: "Parkplatz Sportpark, Maastrichter Str., Frankfurt", price: "Kostenlos", dress_code: "Sportkleidung & Fußballschuhe (Rasen)", max_participants: 20, max_per_email: 5, status: "published", cancellation_reason: null, published_at: NOW, created_at: NOW, current_participants: 5, pending_participants: 0 },
-  { id: 2, title: "HIIT Outdoor Training", category: "fitness", description: "Hochintensives Intervalltraining an der frischen Luft. Für Anfänger und Fortgeschrittene.", date: "2026-04-05", time: "10:00", location: "Grüneburgpark, Frankfurt", parking_location: "Parkplatz Grüneburgpark, Miquelallee, Frankfurt", price: "5 €", dress_code: "Sportkleidung & Laufschuhe", max_participants: 15, max_per_email: 5, status: "published", cancellation_reason: null, published_at: NOW, created_at: NOW, current_participants: 8, pending_participants: 0 },
+  { id: 2, title: "HIIT Outdoor Training", category: "fitness", description: "Hochintensives Intervalltraining an der frischen Luft. Für Anfänger und Fortgeschrittene.", date: "2026-04-05", time: "10:00", location: "Grüneburgpark, Frankfurt", parking_location: "Parkplatz Grüneburgpark, Miquelallee, Frankfurt", price: "5 €", entry_price: 5, dress_code: "Sportkleidung & Laufschuhe", max_participants: 15, max_per_email: 5, status: "published", cancellation_reason: null, published_at: NOW, created_at: NOW, current_participants: 8, pending_participants: 0 },
   { id: 3, title: "Schwimmtraining für Anfänger", category: "schwimmen", description: "Grundlagen des Schwimmens lernen in entspannter Atmosphäre. Trainer vor Ort.", date: "2026-04-08", time: "18:00", location: "Hallenbad Höchst, Frankfurt", parking_location: null, price: "Spende willkommen", dress_code: "Badebekleidung & Handtuch", max_participants: 12, max_per_email: 5, status: "published", cancellation_reason: null, published_at: NOW, created_at: NOW, current_participants: 10, pending_participants: 0 },
   { id: 4, title: "Fußball-Turnier: Rhein-Main Cup", category: "fussball", description: "Kleines Turnier mit gemischten Teams. Spaß und Fairplay stehen im Vordergrund!", date: "2026-04-19", time: "11:00", location: "Sportanlage Niederrad, Frankfurt", parking_location: "P+R Niederrad, Schwarzwaldstraße, Frankfurt", price: "Kostenlos", dress_code: "Sportkleidung & Hallenschuhe", max_participants: 24, max_per_email: 5, status: "published", cancellation_reason: null, published_at: NOW, created_at: NOW, current_participants: 22, pending_participants: 0 },
   { id: 5, title: "Yoga & Stretching am Morgen", category: "fitness", description: "Sanfter Start in den Tag mit Yoga und Dehnübungen für Körper und Geist.", date: "2026-04-15", time: "08:00", location: "Vereinsraum, Offenbach", parking_location: null, price: "Kostenlos", dress_code: "Bequeme Kleidung & Yogamatte (falls vorhanden)", max_participants: 20, max_per_email: 5, status: "published", cancellation_reason: null, published_at: NOW, created_at: NOW, current_participants: 0, pending_participants: 2 },
-  { id: 6, title: "Aqua-Fitness Kurs", category: "schwimmen", description: "Gelenkschonendes Training im Wasser. Ideal für Einsteiger und Senioren.", date: "2026-04-22", time: "17:00", location: "Rebstockbad, Frankfurt", parking_location: "Parkplatz Rebstockbad, August-Euler-Str. 5, Frankfurt", price: "8 €", dress_code: "Badebekleidung & Handtuch", max_participants: 16, max_per_email: 5, status: "published", cancellation_reason: null, published_at: NOW, created_at: NOW, current_participants: 0, pending_participants: 0 },
+  { id: 6, title: "Aqua-Fitness Kurs", category: "schwimmen", description: "Gelenkschonendes Training im Wasser. Ideal für Einsteiger und Senioren.", date: "2026-04-22", time: "17:00", location: "Rebstockbad, Frankfurt", parking_location: "Parkplatz Rebstockbad, August-Euler-Str. 5, Frankfurt", price: "8 €", entry_price: 8, dress_code: "Badebekleidung & Handtuch", max_participants: 16, max_per_email: 5, status: "published", cancellation_reason: null, published_at: NOW, created_at: NOW, current_participants: 0, pending_participants: 0 },
   { id: 7, title: "Familien-Fußballfest", category: "fussball", description: "Ein Nachmittag für die ganze Familie! Kleine Spiele, Torwandschießen und mehr.", date: "2026-05-03", time: "14:00", location: "Sportpark Preungesheim, Frankfurt", parking_location: null, price: "Kostenlos", dress_code: "Sportkleidung & Turnschuhe", max_participants: 30, max_per_email: 5, status: "draft", cancellation_reason: null, published_at: null, created_at: NOW, current_participants: 0, pending_participants: 0 },
-  { id: 8, title: "Kraulschwimmen Technik-Workshop", category: "schwimmen", description: "Verbessere deine Kraultechnik mit unserem erfahrenen Trainer. Grundkenntnisse erforderlich.", date: "2026-04-29", time: "19:00", location: "Stadionbad, Frankfurt", parking_location: "Parkplatz Stadionbad, Mörfelder Landstr. 362, Frankfurt", price: "10 €", dress_code: "Badebekleidung, Schwimmbrille & Handtuch", max_participants: 10, max_per_email: 5, status: "published", cancellation_reason: null, published_at: NOW, created_at: NOW, current_participants: 10, pending_participants: 0 },
+  { id: 8, title: "Kraulschwimmen Technik-Workshop", category: "schwimmen", description: "Verbessere deine Kraultechnik mit unserem erfahrenen Trainer. Grundkenntnisse erforderlich.", date: "2026-04-29", time: "19:00", location: "Stadionbad, Frankfurt", parking_location: "Parkplatz Stadionbad, Mörfelder Landstr. 362, Frankfurt", price: "10 €", entry_price: 10, dress_code: "Badebekleidung, Schwimmbrille & Handtuch", max_participants: 10, max_per_email: 5, status: "published", cancellation_reason: null, published_at: NOW, created_at: NOW, current_participants: 10, pending_participants: 0 },
 ];
 
 // Internal type keeps legacy fields for local dev/test data
-type LocalReg = Registration & { first_name: string; last_name: string; guests: number };
+type LocalReg = Registration & { first_name: string; last_name: string; guests: number; paid_person_prices?: Record<string, number> | null };
 
 let localEvents = [...seedEvents];
 let localRegistrations: LocalReg[] = [];
@@ -74,6 +77,7 @@ function initSeedRegistrations() {
         checked_in_by: null,
         reminder_sent_at: null,
         is_walk_in: false,
+        is_waitlist: false,
         notes: null,
       });
     }
@@ -103,6 +107,7 @@ function toRegistrationWithEvent(r: LocalReg): RegistrationWithEvent {
     first_name: r.first_name,
     last_name: r.last_name,
     person_count: r.guests + 1,
+    child_count: r.persons?.filter((p) => p.is_child && !p.cancelled_at).length ?? 0,
   };
 }
 
@@ -154,10 +159,14 @@ export function getLocalCheckinEvents() {
     const regs = localRegistrations.filter(
       (r) => r.event_id === e.id && r.status === "approved"
     );
-    const approved_count = regs.reduce((s, r) => s + 1 + r.guests, 0);
-    const checked_in_count = regs
-      .filter((r) => r.checked_in_at !== null)
-      .reduce((s, r) => s + 1 + r.guests, 0);
+    const entries = regs.flatMap((reg) =>
+      (getLocalRegistrationByToken(reg.status_token)?.persons ?? [])
+        .filter((person) => !person.cancelled_at)
+        .map((person) => ({ person, cents: personRevenueCents(e, person, reg.paid_person_prices) }))
+    );
+    const checkedIn = entries.filter(({ person }) => person.checked_in_at != null);
+    const approved_count = entries.length;
+    const checked_in_count = checkedIn.length;
     const entry_price = (e as { entry_price?: number | null }).entry_price ?? null;
     return {
       id: e.id,
@@ -171,8 +180,8 @@ export function getLocalCheckinEvents() {
       checked_in_count,
       total_costs: 0,
       total_donations: 0,
-      expected_revenue: entry_price != null ? approved_count * entry_price : 0,
-      actual_revenue: entry_price != null ? checked_in_count * entry_price : 0,
+      expected_revenue: entries.reduce((sum, entry) => sum + entry.cents, 0) / 100,
+      actual_revenue: checkedIn.reduce((sum, entry) => sum + entry.cents, 0) / 100,
     };
   }
 
@@ -200,7 +209,7 @@ export function getLocalEvents(): EventWithRegistrations[] {
   return localEvents
     .filter((e) => e.status === "published" && e.date >= new Date().toISOString().split("T")[0])
     .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))
-    .map((e) => ({ ...e, images: getImagesForEvent(e.id) }));
+    .map((e) => toPublicEvent({ ...e, images: getImagesForEvent(e.id) }));
 }
 
 export function getLocalEvent(id: number) {
@@ -208,8 +217,14 @@ export function getLocalEvent(id: number) {
 }
 
 export function getLocalRegistrationCount(eventId: number): number {
+  // Approved *and* pending sign-ups count towards the taken spots – see
+  // getRegistrationCount / toPublicEvent for the rationale.
   return localRegistrations
-    .filter((r) => r.event_id === eventId && r.status === "approved")
+    .filter(
+      (r) =>
+        r.event_id === eventId &&
+        (r.status === "approved" || r.status === "pending")
+    )
     .reduce((sum, r) => sum + 1 + r.guests, 0);
 }
 
@@ -245,6 +260,7 @@ export function createLocalRegistration(data: {
     checked_in_by: null,
     reminder_sent_at: null,
     is_walk_in: false,
+    is_waitlist: false,
     notes: null,
   };
   localRegistrations.push(registration);
@@ -253,17 +269,17 @@ export function createLocalRegistration(data: {
 
 export function createLocalWalkInRegistration(data: {
   event_id: number;
-  persons: Array<{ firstName: string; lastName: string }>;
+  persons: Array<{ firstName: string; lastName: string; isChild?: boolean }>;
   email: string | null;
   phone: string | null;
   notes: string | null;
   checked_in_by: string | null;
-}): { id: number; alreadyExists: boolean } {
+}): { id: number; status_token: string; alreadyExists: boolean } {
   if (data.email) {
     const existing = localRegistrations.find(
       (r) => r.event_id === data.event_id && r.email?.toLowerCase() === data.email!.toLowerCase()
     );
-    if (existing) return { id: existing.id, alreadyExists: true };
+    if (existing) return { id: existing.id, status_token: existing.status_token, alreadyExists: true };
   }
 
   const first = data.persons[0] ?? { firstName: "", lastName: "" };
@@ -287,11 +303,22 @@ export function createLocalWalkInRegistration(data: {
     checked_in_by: data.checked_in_by ?? null,
     reminder_sent_at: null,
     is_walk_in: true,
+    is_waitlist: false,
     notes: data.notes,
   };
   localRegistrations.push(registration);
   recomputeParticipants(data.event_id);
-  return { id: registration.id, alreadyExists: false };
+  registration.persons = data.persons.map((person, index) => ({
+    id: `local-${registration.id}-${index}`,
+    registration_id: registration.id,
+    first_name: person.firstName,
+    last_name: person.lastName,
+    is_child: person.isChild === true,
+    checked_in_at: registration.checked_in_at,
+    cancelled_at: null,
+    created_at: now,
+  }));
+  return { id: registration.id, status_token: registration.status_token, alreadyExists: false };
 }
 
 // ─── Status Page ─────────────────────────────────────────
@@ -302,12 +329,13 @@ export function getLocalRegistrationByToken(token: string): RegistrationStatusIn
   const event = localEvents.find((e) => e.id === reg.event_id);
   if (!event) return null;
 
-  const persons: RegistrationStatusInfo["persons"] = [
+  const persons: RegistrationStatusInfo["persons"] = reg.persons ?? [
     {
       id: `local-${reg.id}-0`,
       registration_id: reg.id,
       first_name: reg.first_name,
       last_name: reg.last_name,
+      is_child: false,
       checked_in_at: reg.checked_in_at,
       cancelled_at: null,
       created_at: reg.created_at,
@@ -317,6 +345,7 @@ export function getLocalRegistrationByToken(token: string): RegistrationStatusIn
       registration_id: reg.id,
       first_name: "Begleitperson",
       last_name: `${i + 1}`,
+      is_child: false,
       checked_in_at: null,
       cancelled_at: null,
       created_at: reg.created_at,
@@ -330,6 +359,8 @@ export function getLocalRegistrationByToken(token: string): RegistrationStatusIn
     email: reg.email ?? "",
     guests: reg.guests,
     status: reg.status,
+    is_waitlist: reg.is_waitlist,
+    paid_at: null,
     status_note: reg.status_note,
     status_changed_at: reg.status_changed_at,
     created_at: reg.created_at,
@@ -338,7 +369,12 @@ export function getLocalRegistrationByToken(token: string): RegistrationStatusIn
     event_time: event.time,
     event_location: event.location,
     event_category: event.category,
+    event_cancellation_deadline: event.cancellation_deadline ?? null,
     event_price: event.price,
+    event_entry_price: event.entry_price ?? null,
+    event_child_entry_price: event.child_entry_price ?? null,
+    event_child_price: event.child_price ?? null,
+    amount_paid: null,
     event_dress_code: event.dress_code,
     qr_code: reg.qr_code,
     checked_in_at: reg.checked_in_at,
@@ -354,6 +390,33 @@ export function cancelLocalRegistrationByToken(token: string): RegistrationStatu
   reg.status_note = null;
   recomputeParticipants(reg.event_id);
   return getLocalRegistrationByToken(token);
+}
+
+export function getLocalCheckoutInfo(token: string): CheckoutInfo | null {
+  const reg = localRegistrations.find((r) => r.status_token === token);
+  if (!reg) return null;
+  const event = localEvents.find((e) => e.id === reg.event_id);
+  if (!event) return null;
+  const persons = getLocalRegistrationByToken(token)!.persons.filter((p) => !p.cancelled_at);
+
+  return {
+    registration_id: reg.id,
+    email: reg.email,
+    status: reg.status,
+    is_waitlist: reg.is_waitlist,
+    event_id: event.id,
+    event_title: event.title,
+    event_date: event.date,
+    price: event.price,
+    paid_at: null,
+    entry_price: event.entry_price ?? null,
+    child_entry_price: event.child_entry_price ?? null,
+    stripe_child_price_id: event.stripe_child_price_id ?? null,
+    stripe_price_id: event.stripe_price_id ?? null,
+    person_count: persons.length,
+    child_count: persons.filter((p) => p.is_child).length,
+    persons: persons.map(({ id, is_child }) => ({ id, is_child })),
+  };
 }
 
 // ─── Admin: Stats ────────────────────────────────────────
@@ -516,6 +579,7 @@ export function getLocalEventPersons(eventId: number): EventPerson[] {
       registration_id: r.id,
       first_name: r.first_name,
       last_name: r.last_name,
+      is_child: false,
       checked_in_at: r.checked_in_at,
       cancelled_at: null,
       email: r.email,
@@ -530,6 +594,7 @@ export function getLocalEventPersons(eventId: number): EventPerson[] {
         registration_id: r.id,
         first_name: "Begleitperson",
         last_name: `${i + 1}`,
+        is_child: false,
         checked_in_at: null,
         cancelled_at: null,
         email: r.email,

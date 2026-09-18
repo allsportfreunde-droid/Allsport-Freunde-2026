@@ -80,8 +80,21 @@ export default function TeilnahmebedingungenPage() {
                 das Anmeldeformular auf der Vereinswebsite.
               </li>
               <li>
-                Eine verbindliche Teilnahme setzt eine schriftliche Bestätigung
-                per E-Mail durch den Verein voraus.
+                Bei Veranstaltungen mit Unkostenbeitrag wird die Anmeldung mit
+                der Zahlung des Teilnahmebetrags verbindlich. Die Bestätigung
+                erfolgt anschließend per E-Mail zusammen mit dem Check-In
+                QR-Code.
+              </li>
+              <li>
+                Bei kostenlosen Veranstaltungen wird die Anmeldung durch eine
+                Bestätigung des Vereins per E-Mail verbindlich.
+              </li>
+              <li>
+                Ist eine Veranstaltung bereits ausgebucht, erfolgt die Anmeldung
+                auf einer Warteliste. Solange kein Platz zugeteilt ist, besteht
+                keine Zahlungsmöglichkeit und keine Zahlungspflicht. Wird ein
+                Platz frei, werden Wartende per E-Mail benachrichtigt und können
+                den Teilnahmebetrag dann zahlen.
               </li>
               <li>
                 Spontane Teilnahmen ohne vorherige Anmeldung sind nicht möglich.
@@ -101,8 +114,28 @@ export default function TeilnahmebedingungenPage() {
           <Section title="3. Stornierung & Absage durch den Verein">
             <ul className="text-sm leading-relaxed list-disc pl-6 space-y-2">
               <li>
-                Teilnehmende können ihre Anmeldung bis zu dem in der
-                Eventbeschreibung genannten Stornierungszeitpunkt zurückziehen.
+                Teilnehmende können ihre Anmeldung bis <strong>24 Stunden vor
+                Beginn</strong> der Veranstaltung selbst zurückziehen – entweder
+                vollständig oder für einzelne angemeldete Personen.
+              </li>
+              <li>
+                Für einzelne Veranstaltungen kann eine abweichende Stornofrist
+                gelten. Die jeweils gültige Frist wird auf der Statusseite deiner
+                Anmeldung angezeigt.
+              </li>
+              <li>
+                Solange der Teilnahmebetrag noch nicht gezahlt wurde, kann die
+                Anmeldung jederzeit zurückgezogen werden – die Stornofrist gilt
+                erst ab dem Zeitpunkt der Zahlung.
+              </li>
+              <li>
+                Nach Ablauf dieser Frist ist eine Stornierung über die Website
+                nicht mehr möglich. Wende dich in diesem Fall bitte direkt an
+                den Verein.
+              </li>
+              <li>
+                Bereits gezahlte Teilnahmebeträge werden bei fristgerechter
+                Stornierung erstattet.
               </li>
               <li>
                 Der Verein behält sich vor, Veranstaltungen bei zu geringer
@@ -111,7 +144,8 @@ export default function TeilnahmebedingungenPage() {
               </li>
               <li>
                 Im Falle einer Absage werden alle angemeldeten Teilnehmenden per
-                E-Mail informiert.
+                E-Mail informiert. Bereits gezahlte Teilnahmebeträge werden
+                vollständig erstattet.
               </li>
             </ul>
           </Section>
@@ -120,14 +154,16 @@ export default function TeilnahmebedingungenPage() {
             <ul className="text-sm leading-relaxed list-disc pl-6 space-y-2">
               <li>
                 Die Anmeldung zu einer Veranstaltung ist verbindlich. Mit der
-                Bestätigung durch den Verein entsteht eine Zahlungspflicht für
-                den jeweiligen Unkostenbeitrag.
+                Anmeldung zu einer Veranstaltung mit Unkostenbeitrag entsteht die
+                Pflicht, diesen zu entrichten – bei ausgebuchten Veranstaltungen
+                erst mit der Zuteilung eines Platzes.
               </li>
               <li>
                 Erscheint eine angemeldete Person nicht zur Veranstaltung, ohne
                 sich fristgerecht abgemeldet zu haben, bleibt der
                 Teilnahmebetrag in voller Höhe fällig und wird entsprechend in
-                Rechnung gestellt.
+                Rechnung gestellt. Bereits gezahlte Beträge werden in diesem Fall
+                nicht erstattet.
               </li>
               <li>
                 Bei zweimaligem unentschuldigten Nicht-Erscheinen trotz

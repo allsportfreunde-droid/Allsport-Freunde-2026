@@ -19,6 +19,7 @@ import {
   Mail,
   User,
 } from "lucide-react";
+import ChildBadge from "@/components/ChildBadge";
 import type { EventWithRegistrations, RegistrationWithEvent } from "@/lib/types";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -216,6 +217,12 @@ function ParticipantInfoModal({
                     : "Keine"
                 }
               />
+              {reg.child_count > 0 && (
+                <InfoRow
+                  label="Davon Kinder"
+                  value={`${reg.child_count} Kind${reg.child_count !== 1 ? "er" : ""} (U18)`}
+                />
+              )}
               {reg.checked_in_at && (
                 <InfoRow
                   label="Eingecheckt um"
@@ -614,14 +621,17 @@ export default function EventReportPage() {
                           <ParticipantBadge cat={cat} />
                         </td>
                         <td className="px-4 py-3 text-center text-gray-600 hidden sm:table-cell">
-                          {(reg.person_count - 1) > 0 ? (
-                            <span className="inline-flex items-center gap-1">
-                              <UsersRound className="w-3.5 h-3.5 text-gray-400" />
-                              {reg.person_count - 1}
-                            </span>
-                          ) : (
-                            <span className="text-gray-300">—</span>
-                          )}
+                          <span className="inline-flex items-center gap-1.5">
+                            {(reg.person_count - 1) > 0 ? (
+                              <span className="inline-flex items-center gap-1">
+                                <UsersRound className="w-3.5 h-3.5 text-gray-400" />
+                                {reg.person_count - 1}
+                              </span>
+                            ) : (
+                              <span className="text-gray-300">—</span>
+                            )}
+                            {reg.child_count > 0 && <ChildBadge count={reg.child_count} />}
+                          </span>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <button

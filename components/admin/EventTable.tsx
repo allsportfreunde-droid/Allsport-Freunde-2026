@@ -372,8 +372,16 @@ export default function EventTable() {
     setLoading(true);
     fetch("/api/admin/events")
       .then((r) => r.json())
-      .then(setEvents)
-      .catch(() => toast("Events konnten nicht geladen werden.", "error"))
+      .then((data) => {
+        // Bei einem Serverfehler kommt { error: "..." } statt einer Liste –
+        // ungeprüft übernommen zerlegt das später den Filter mit einem
+        // nichtssagenden "events.filter is not a function".
+        if (!Array.isArray(data)) {
+          throw new Error(data?.error || "Unerwartete Antwort vom Server.");
+        }
+        setEvents(data);
+      })
+      .catch((err) => toast(err?.message || "Events konnten nicht geladen werden.", "error"))
       .finally(() => setLoading(false));
   };
 

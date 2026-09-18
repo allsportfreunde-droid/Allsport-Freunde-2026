@@ -1,6 +1,7 @@
 import { getAllTemplates, createTemplate } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import type { EventTemplateInput } from "@/lib/types";
+import { normalizePrice } from "@/lib/price";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
     if (!body.name?.trim()) {
       return NextResponse.json({ error: "Bitte gib einen Vorlagennamen an." }, { status: 400 });
     }
-    if (!body.title?.trim() || !body.category || !body.location?.trim() || !body.price?.trim() || !body.max_participants) {
+    if (!body.title?.trim() || !body.category || !body.location?.trim() || !body.max_participants) {
       return NextResponse.json({ error: "Bitte fülle alle Pflichtfelder aus." }, { status: 400 });
     }
     if (!["fussball", "fitness", "schwimmen"].includes(body.category)) {
@@ -31,14 +32,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Mindestens 1 Teilnehmerplatz erforderlich." }, { status: 400 });
     }
 
+    const price = normalizePrice(body);
     const result = await createTemplate({
       name: body.name.trim(),
       title: body.title.trim(),
       category: body.category,
       description: (body.description || "").trim(),
       location: body.location.trim(),
-      price: body.price.trim(),
-      entry_price: typeof body.entry_price === "number" ? body.entry_price : null,
+      price: price.price,
+      entry_price: price.entry_price,
       dress_code: (body.dress_code || "").trim(),
       max_participants: body.max_participants,
       images: Array.isArray(body.images) ? body.images : [],

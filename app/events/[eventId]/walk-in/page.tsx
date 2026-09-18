@@ -115,6 +115,10 @@ export default async function WalkInPage({
       eventDate={formattedDate}
       eventLocation={event.location}
       maxPersons={event.max_per_email ?? 5}
+      priceText={event.price}
+      entryPrice={event.entry_price}
+      childEntryPrice={event.child_entry_price}
+      childPriceText={event.child_price}
     />
   );
 }

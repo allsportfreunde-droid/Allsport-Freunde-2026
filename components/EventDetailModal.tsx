@@ -18,9 +18,11 @@ import {
   Copy,
   Check,
   MessageSquare,
+  Share2,
 } from "lucide-react";
 import type { EventWithRegistrations } from "@/lib/types";
 import ImageCarousel from "./ImageCarousel";
+import { formatEventPrice } from "@/lib/price";
 
 // Leaflet must only run client-side (no SSR)
 const LeafletMap = dynamic(() => import("./LeafletMap"), { ssr: false });
@@ -65,6 +67,7 @@ export default function EventDetailModal({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [copiedLocation, setCopiedLocation] = useState(false);
   const [copiedParking, setCopiedParking] = useState(false);
+  const [copiedShare, setCopiedShare] = useState(false);
 
   // Lock body scroll when modal is open
   useEffect(() => {
@@ -104,13 +107,29 @@ export default function EventDetailModal({
   if (!event) return null;
 
   const config = categoryConfig[event.category];
-  const isFull = event.current_participants >= event.max_participants;
-  const percentage = Math.min(
-    100,
-    (event.current_participants / event.max_participants) * 100
-  );
-  const available = event.max_participants - event.current_participants;
+  const isFull = event.is_full ?? false;
+  const percentage = event.occupancy_percentage ?? 0;
+  const bookedPercentage = percentage;
   const hasImages = (event.images?.length ?? 0) > 0;
+
+  // Teilen: auf dem Handy die System-Auswahl (WhatsApp, Signal, …),
+  // am Desktop fällt es auf "Link kopieren" zurück.
+  const handleShare = async () => {
+    const url = `${window.location.origin}/events/${event.id}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: event.title,
+          text: `${event.title} – ${formatDate(event.date)}, ${event.time} Uhr`,
+          url,
+        });
+      } catch {
+        // Abbruch durch den Nutzer – nichts weiter tun.
+      }
+      return;
+    }
+    copyToClipboard(url, setCopiedShare);
+  };
 
   return (
     <AnimatePresence>
@@ -271,7 +290,7 @@ export default function EventDetailModal({
                   <InfoBlock
                     icon={<Euro className="w-4 h-4 text-amber-600" />}
                     label="Kosten"
-                    value={event.price}
+                    value={formatEventPrice(event)}
                   />
                   {event.dress_code && (
                     <InfoBlock
@@ -297,12 +316,7 @@ export default function EventDetailModal({
                         isFull ? "text-red-600" : "text-gray-700"
                       }`}
                     >
-                      {event.current_participants >= event.max_participants ? 
-                      "Ausgebucht" : 
-                      `${event.current_participants} von ${event.max_participants} Plätzen belegt`}
-                      {event.pending_participants
-                        ? ` (${event.pending_participants} ausstehend)`
-                        : ""}
+                      {isFull ? "Ausgebucht" : `${bookedPercentage}% vergeben`}
                     </span>
                   </div>
                   <Progress
@@ -313,10 +327,14 @@ export default function EventDetailModal({
                         : progressColors[event.category]
                     }
                   />
-                  {!isFull && (
+                  {!isFull ? (
                     <p className="text-xs text-green-700 font-medium">
-                      Noch {available}{" "}
-                      {available === 1 ? "Platz" : "Plätze"} verfügbar
+                      Es sind noch Plätze verfügbar
+                    </p>
+                  ) : (
+                    <p className="text-xs text-amber-700 font-medium">
+                      Dieses Event ist ausgebucht. Trage dich in die Warteliste
+                      ein – wir benachrichtigen dich, sobald ein Platz frei wird.
                     </p>
                   )}
                 </div>
@@ -325,14 +343,25 @@ export default function EventDetailModal({
                 <div className="flex flex-col sm:flex-row gap-3 pt-2">
                   <Button
                     className="flex-1 h-12 text-base"
-                    disabled={isFull}
                     variant={isFull ? "secondary" : "default"}
                     onClick={() => {
                       onClose();
                       onRegister(event);
                     }}
                   >
-                    {isFull ? "Ausgebucht" : "Jetzt anmelden"}
+                    {isFull ? "In die Warteliste einschreiben" : "Jetzt anmelden"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-12"
+                    onClick={handleShare}
+                  >
+                    {copiedShare ? (
+                      <Check className="w-4 h-4 mr-2 text-green-600" />
+                    ) : (
+                      <Share2 className="w-4 h-4 mr-2" />
+                    )}
+                    {copiedShare ? "Link kopiert" : "Teilen"}
                   </Button>
                   <Button
                     variant="outline"

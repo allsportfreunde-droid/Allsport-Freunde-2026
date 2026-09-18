@@ -7,6 +7,7 @@ import {
   sendRegistrationApprovedEmail,
   sendRegistrationRejectedEmail,
 } from "@/lib/email";
+import { generateAndSaveCheckinQR } from "@/lib/checkin-qr";
 import { NextRequest, NextResponse } from "next/server";
 import type { RegistrationStatus } from "@/lib/types";
 
@@ -43,6 +44,7 @@ export async function PATCH(request: NextRequest) {
     // Fire-and-forget emails
     for (const reg of regsBefore) {
       if (!reg) continue;
+      if (results.find(result => result.id === reg.id)?.status_changed === false) continue;
       const event = await getEvent(reg.event_id);
       if (!event || !reg.email) continue;
 
@@ -58,7 +60,10 @@ export async function PATCH(request: NextRequest) {
       };
 
       if (status === "approved") {
-        sendRegistrationApprovedEmail(emailData);
+        // Generate + persist the check-in QR code so it shows on the status
+        // page and in the approval email (mirrors the single-approval route).
+        const qrCode = await generateAndSaveCheckinQR(reg.id, event);
+        sendRegistrationApprovedEmail({ ...emailData, qrCode });
       } else if (status === "rejected") {
         sendRegistrationRejectedEmail({ ...emailData, note });
       }

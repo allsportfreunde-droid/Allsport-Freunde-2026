@@ -37,4 +37,7 @@ export function getClientIp(headers: Headers): string {
 export const RATE_LIMITS = {
   registration: { limit: 5, windowMs: 10 * 60 * 1000 },
   contact: { limit: 3, windowMs: 10 * 60 * 1000 },
+  // Jeder Aufruf erzeugt eine Stripe Session – das soll niemand in Schleife tun.
+  checkout: { limit: 10, windowMs: 10 * 60 * 1000 },
+  checkoutStatus: { limit: 120, windowMs: 60 * 1000 },
 } as const;

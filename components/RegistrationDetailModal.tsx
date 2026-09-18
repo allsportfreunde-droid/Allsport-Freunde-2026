@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect } from "react";
-import { X, Loader2, User, Calendar, CheckCircle2, Info } from "lucide-react";
+import { X, Loader2, User, Users, Calendar, CheckCircle2, Info, Euro, ExternalLink } from "lucide-react";
 import StatusBadge from "@/components/status/StatusBadge";
+import ChildBadge from "@/components/ChildBadge";
+import PaidBadge from "@/components/PaidBadge";
 import type { RegistrationDetail } from "@/lib/types";
+import { formatEuro } from "@/lib/finance";
 
 interface Props {
   open: boolean;
@@ -158,6 +161,56 @@ export default function RegistrationDetailModal({
                 <Row label="Telefonnummer" value={data.phone} />
               </Section>
 
+              {/* Angemeldete Personen */}
+              <Section
+                title={`Angemeldete Personen (${data.persons?.length ?? 0})`}
+                icon={Users}
+              >
+                {data.persons && data.persons.length > 0 ? (
+                  data.persons.map((person, idx) => (
+                    <div
+                      key={person.id}
+                      className="flex items-center justify-between gap-3 py-2 border-b border-gray-100 last:border-0"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm text-gray-900 break-words">
+                          {person.first_name} {person.last_name}
+                          {person.is_child && (
+                            <ChildBadge className="ml-1.5 align-middle" />
+                          )}
+                          {idx === 0 && (
+                            <span className="ml-1.5 text-xs text-gray-400 font-normal">
+                              (Hauptperson)
+                            </span>
+                          )}
+                        </p>
+                        {person.checked_in_at && (
+                          <p className="text-xs text-green-700 mt-0.5">
+                            Eingecheckt · {formatDateTime(person.checked_in_at)}
+                          </p>
+                        )}
+                      </div>
+                      {person.checked_in_at ? (
+                        <span className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-green-700">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Ein
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-xs text-gray-400">
+                          Ausstehend
+                        </span>
+                      )}
+                    </div>
+                  ))
+                ) : (
+                  <div className="py-2">
+                    <span className="text-sm text-gray-400">
+                      Keine Personen vorhanden
+                    </span>
+                  </div>
+                )}
+              </Section>
+
               {/* Anmeldungs-Details */}
               <Section title="Anmeldungs-Details" icon={Info}>
                 <Row label="Anmeldungs-ID" value={`#${data.id}`} />
@@ -213,6 +266,100 @@ export default function RegistrationDetailModal({
                 )}
               </Section>
 
+              {/* Zahlung */}
+              <Section title="Zahlung" icon={Euro}>
+                {data.checkout_notices?.map((notice, index) => (
+                  <div key={`${notice.created_at}-${index}`} className="my-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    <p className="font-semibold">{notice.kind === "payment_failed" ? "SEPA-Einzug fehlgeschlagen" : "E-Mail-Versand prüfen"}</p>
+                    {notice.data.amount != null && <p>Betrag: {formatEuro(notice.data.amount)}</p>}
+                    {notice.data.reason && <p>{notice.data.reason}</p>}
+                    <p>{formatDateTime(notice.created_at)}</p>
+                    {notice.kind === "payment_failed" && <p>Die Teilnahme wurde dadurch nicht zurückgenommen.
+                      {data.paid_at ? " Inzwischen ist eine Zahlung verbucht." : " Bitte den offenen Betrag klären."}</p>}
+                    {notice.delivery_uncertain
+                      ? <p>Versandausgang unklar. Bitte vor erneutem Versand beim E-Mail-Dienst prüfen.</p>
+                      : <p>{notice.sent_at ? "Admin-E-Mail versendet." : "Admin-E-Mail steht noch aus."}</p>}
+                    {notice.stripe_url && <a className="underline" href={notice.stripe_url} target="_blank" rel="noopener noreferrer">Zahlung bei Stripe</a>}
+                  </div>
+                ))}
+                <Row
+                  label="Status"
+                  value={<PaidBadge paid={data.paid_at != null} className="text-xs" />}
+                />
+                {data.paid_at && (
+                  <>
+                    <Row
+                      label="Bezahlt am"
+                      value={formatDateTime(data.paid_at)}
+                    />
+                    <Row
+                      label="Betrag"
+                      value={
+                        data.amount_paid != null
+                          ? formatEuro(data.amount_paid)
+                          : null
+                      }
+                    />
+                    {/* Storniert wurde bereits und der Teilnehmer hat den
+                        Betrag schriftlich zugesagt bekommen – die Rückzahlung
+                        selbst passiert von Hand im Stripe-Dashboard. */}
+                    {data.refund_due && (
+                      <Row
+                        label="Zu erstatten"
+                        value={
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="font-semibold text-amber-700">
+                              {formatEuro(data.refund_due.amount)}
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              {data.refund_due.persons === 1
+                                ? "1 abgemeldete Person"
+                                : `${data.refund_due.persons} abgemeldete Personen`}
+                            </span>
+                          </span>
+                        }
+                      />
+                    )}
+                    {data.stripe_dashboard_url && (
+                      <Row
+                        label="Bei Stripe"
+                        value={
+                          <a
+                            href={data.stripe_dashboard_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+                          >
+                            Zahlung im Dashboard öffnen
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                        }
+                      />
+                    )}
+                    <Row
+                      label="Payment-ID"
+                      value={
+                        data.stripe_payment_intent_id ? (
+                          <span className="font-mono text-xs break-all">
+                            {data.stripe_payment_intent_id}
+                          </span>
+                        ) : null
+                      }
+                    />
+                    <Row
+                      label="Checkout-Session"
+                      value={
+                        data.stripe_session_id ? (
+                          <span className="font-mono text-xs break-all">
+                            {data.stripe_session_id}
+                          </span>
+                        ) : null
+                      }
+                    />
+                  </>
+                )}
+              </Section>
+
               {/* Check-In */}
               <Section title="Check-In" icon={CheckCircle2}>
                 <Row
@@ -247,9 +394,15 @@ export default function RegistrationDetailModal({
                   label="Status-Seite"
                   value={
                     data.status_token ? (
-                      <span className="font-mono text-xs text-gray-400">
-                        {data.status_token.slice(0, 20)}…
-                      </span>
+                      <a
+                        href={`/status/${data.status_token}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+                      >
+                        Status-Seite öffnen
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
                     ) : null
                   }
                 />

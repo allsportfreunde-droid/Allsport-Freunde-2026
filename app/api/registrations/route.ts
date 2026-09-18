@@ -4,12 +4,17 @@ import {
   findRegistration,
 } from "@/lib/db";
 import { getSQL } from "@/lib/db/utils";
-import { sendRegistrationReceivedEmail } from "@/lib/email";
+import {
+  sendRegistrationReceivedEmail,
+  sendWaitlistReceivedEmail,
+} from "@/lib/email";
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import type { RegistrationRequest } from "@/lib/types";
 import { checkRateLimit, getClientIp, RATE_LIMITS } from "@/lib/ratelimit";
-import { validateHoneypot } from "@/lib/honeypot";
+import { honeypotFailure } from "@/lib/honeypot";
+import { formatPriceLabel } from "@/lib/price";
+import { cancellationDeadline, formatDeadline } from "@/lib/cancellation";
 
 export async function POST(request: NextRequest) {
   const ip = getClientIp(request.headers);
@@ -23,8 +28,20 @@ export async function POST(request: NextRequest) {
   try {
     const body: RegistrationRequest & { _hp?: string; _ts?: string } = await request.json();
 
-    if (!validateHoneypot({ _hp: body._hp, _ts: body._ts })) {
-      return NextResponse.json({ error: "Ungültige Anfrage" }, { status: 400 });
+    // Abgewiesen wird ohne Begründung nach außen – im Log steht sie, sonst
+    // lässt sich eine irrtümlich abgelehnte Anmeldung nicht aufklären.
+    const abgewiesen = honeypotFailure({ _hp: body._hp, _ts: body._ts });
+    if (abgewiesen) {
+      console.warn(`Anmeldung abgewiesen (${abgewiesen}), IP ${ip}`);
+      return NextResponse.json(
+        {
+          error:
+            abgewiesen === "too_fast"
+              ? "Das ging zu schnell. Bitte sende das Formular gleich noch einmal ab."
+              : "Ungültige Anfrage",
+        },
+        { status: 400 }
+      );
     }
 
     const { event_id, email, phone, persons } = body;
@@ -104,20 +121,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Hinweis: Es gibt bewusst keine harte Kapazitätsgrenze mehr. Ist ein Event
+    // ausgebucht, landen weitere Anmeldungen als normale "pending"-Anmeldungen
+    // auf der Warteliste und können vom Team angenommen werden – auch über die
+    // Kapazität hinaus. Wir merken uns nur, ob das Event bereits voll war, um
+    // die passende Bestätigungs-E-Mail (Warteliste vs. normale Anmeldung) zu
+    // verschicken. Dieselbe Definition wie im Frontend-Button.
     const currentCount = await getRegistrationCount(event_id);
-    const spotsAvailable = event.max_participants - currentCount;
-
-    if (persons.length > spotsAvailable) {
-      return NextResponse.json(
-        {
-          error:
-            spotsAvailable === 0
-              ? "Dieses Event ist leider ausgebucht."
-              : `Es sind nur noch ${spotsAvailable} Plätze verfügbar.`,
-        },
-        { status: 409 }
-      );
-    }
+    const isWaitlist = currentCount >= event.max_participants;
 
     if (persons.length > maxPerEmail) {
       return NextResponse.json(
@@ -135,6 +146,7 @@ export async function POST(request: NextRequest) {
         UPDATE registrations SET
           phone = ${phone.trim()},
           status = 'pending',
+          is_waitlist = ${isWaitlist},
           status_token = ${statusToken},
           status_changed_at = NOW(),
           status_note = NULL
@@ -145,21 +157,23 @@ export async function POST(request: NextRequest) {
       await sql`DELETE FROM registration_persons WHERE registration_id = ${registrationId}`;
     } else {
       const rows = await sql`
-        INSERT INTO registrations (event_id, email, phone, status, status_token)
-        VALUES (${event_id}, ${normalizedEmail}, ${phone.trim()}, 'pending', ${statusToken})
+        INSERT INTO registrations (event_id, email, phone, status, status_token, is_waitlist)
+        VALUES (${event_id}, ${normalizedEmail}, ${phone.trim()}, 'pending', ${statusToken}, ${isWaitlist})
         RETURNING id
       `;
       registrationId = (rows[0] as { id: number }).id;
     }
 
     for (const p of persons) {
+      // isChild kommt aus dem Toggle im Formular. Alles außer einem
+      // ausdrücklichen true gilt als Erwachsener – so wie der Default "Nein".
       await sql`
-        INSERT INTO registration_persons (registration_id, first_name, last_name)
-        VALUES (${registrationId}, ${p.firstName.trim()}, ${p.lastName.trim()})
+        INSERT INTO registration_persons (registration_id, first_name, last_name, is_child)
+        VALUES (${registrationId}, ${p.firstName.trim()}, ${p.lastName.trim()}, ${p.isChild === true})
       `;
     }
 
-    sendRegistrationReceivedEmail({
+    const emailData = {
       to: normalizedEmail,
       firstName: persons[0].firstName.trim(),
       lastName: persons[0].lastName.trim(),
@@ -169,7 +183,26 @@ export async function POST(request: NextRequest) {
       eventLocation: event.location,
       statusToken,
       persons: persons.map((p) => ({ firstName: p.firstName.trim(), lastName: p.lastName.trim() })),
-    });
+    };
+
+    if (isWaitlist) {
+      // Auf der Warteliste ist nichts zu zahlen – erst wenn ein Platz
+      // angeboten wird.
+      sendWaitlistReceivedEmail(emailData);
+    } else {
+      const deadline = cancellationDeadline({
+        event_date: event.date,
+        event_time: event.time,
+        cancellation_deadline: event.cancellation_deadline,
+      });
+      sendRegistrationReceivedEmail({
+        ...emailData,
+        priceLabel:
+          formatPriceLabel(event.entry_price, persons.length, event.price, event.child_entry_price, persons.filter((p) => p.isChild === true).length) ??
+          undefined,
+        cancellationLabel: deadline ? formatDeadline(deadline) : undefined,
+      });
+    }
 
     return NextResponse.json(
       {

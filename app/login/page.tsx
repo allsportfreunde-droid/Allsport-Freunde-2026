@@ -20,6 +20,10 @@ export default async function LoginPage() {
     redirect("/admin");
   }
 
+  // Passwort-Login nur außerhalb der Produktion anbieten (Preview/lokal) –
+  // damit lässt sich der Admin auf Preview-Branches ohne E-Mail-Code testen.
+  const allowPasswordLogin = process.env.VERCEL_ENV !== "production";
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-600 via-green-700 to-emerald-800 flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
@@ -33,7 +37,7 @@ export default async function LoginPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <LoginForm />
+          <LoginForm allowPasswordLogin={allowPasswordLogin} />
         </CardContent>
       </Card>
     </div>

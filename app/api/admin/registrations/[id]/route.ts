@@ -1,4 +1,5 @@
-import { deleteRegistration, getRegistrationDetail } from "@/lib/db";
+import { deleteRegistration, getRefundDue, getRegistrationDetail, getCheckoutAdminNotices } from "@/lib/db";
+import { stripePaymentUrl } from "@/lib/stripe";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(
@@ -11,7 +12,15 @@ export async function GET(
     if (!registration) {
       return NextResponse.json({ error: "Anmeldung nicht gefunden." }, { status: 404 });
     }
-    return NextResponse.json(registration);
+    const refundDue = await getRefundDue(Number(id));
+    const notices = await getCheckoutAdminNotices(Number(id));
+    return NextResponse.json({
+      ...registration,
+      stripe_dashboard_url: stripePaymentUrl(registration.stripe_payment_intent_id),
+      refund_due: refundDue.amount > 0 ? refundDue : null,
+      checkout_notices: notices.map(notice => ({ ...notice,
+        stripe_url: stripePaymentUrl(notice.payment_intent_id as string | null) })),
+    });
   } catch (error) {
     console.error("Fehler beim Laden der Anmeldung:", error);
     return NextResponse.json({ error: "Anmeldung konnte nicht geladen werden." }, { status: 500 });

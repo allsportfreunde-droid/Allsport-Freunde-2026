@@ -23,3 +23,14 @@ export function parseDecimal(value: string): number {
   }
   return parseFloat(value);
 }
+
+/** Berechneter Eintritt je Person; ein gespeicherter Zahlungsanteil hat Vorrang. */
+export function personRevenueCents(
+  event: { entry_price?: number | null; child_entry_price?: number | null },
+  person: { id: string; is_child: boolean },
+  paidPrices?: Record<string, number> | null
+): number {
+  return paidPrices?.[person.id] ?? Math.round((
+    person.is_child ? event.child_entry_price ?? event.entry_price ?? 0 : event.entry_price ?? 0
+  ) * 100);
+}

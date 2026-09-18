@@ -1,0 +1,11 @@
+.git
+.github
+.next
+node_modules
+coverage
+.env
+.env.*
+npm-debug.log*
+vitest.config.ts
+__tests__
+scripts

@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Mail } from "lucide-react";
 
-function LoginFormInner() {
+function LoginFormInner({ allowPasswordLogin }: { allowPasswordLogin: boolean }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialError =
@@ -18,9 +18,35 @@ function LoginFormInner() {
 
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
-  const [stage, setStage] = useState<"email" | "code">("email");
+  const [password, setPassword] = useState("");
+  const [stage, setStage] = useState<"email" | "code" | "password">("email");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(initialError);
+
+  const handlePasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+
+    try {
+      const supabase = createClient();
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (signInError) {
+        setError("E-Mail-Adresse oder Passwort ist falsch.");
+      } else {
+        router.push("/admin");
+        router.refresh();
+      }
+    } catch {
+      setError("Ein Fehler ist aufgetreten. Bitte versuche es erneut.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,6 +104,67 @@ function LoginFormInner() {
       setLoading(false);
     }
   };
+
+  if (stage === "password") {
+    return (
+      <form onSubmit={handlePasswordLogin} className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="email-pw">E-Mail-Adresse</Label>
+          <Input
+            id="email-pw"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoFocus
+            placeholder="name@example.com"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="password">Passwort</Label>
+          <Input
+            id="password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            placeholder="••••••••"
+          />
+        </div>
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3">
+            {error}
+          </div>
+        )}
+
+        <Button type="submit" className="w-full" disabled={loading || !password}>
+          {loading ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              Anmelden...
+            </>
+          ) : (
+            "Anmelden"
+          )}
+        </Button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setStage("email");
+            setPassword("");
+            setError("");
+          }}
+          className="w-full text-sm text-gray-500 hover:text-gray-700 cursor-pointer"
+        >
+          Zurück zum Login per E-Mail-Code
+        </button>
+      </form>
+    );
+  }
 
   if (stage === "code") {
     return (
@@ -180,14 +267,31 @@ function LoginFormInner() {
           "Login-Code senden"
         )}
       </Button>
+
+      {allowPasswordLogin && (
+        <button
+          type="button"
+          onClick={() => {
+            setStage("password");
+            setError("");
+          }}
+          className="w-full text-sm text-gray-500 hover:text-gray-700 cursor-pointer"
+        >
+          Stattdessen mit Passwort anmelden
+        </button>
+      )}
     </form>
   );
 }
 
-export default function LoginForm() {
+export default function LoginForm({
+  allowPasswordLogin = false,
+}: {
+  allowPasswordLogin?: boolean;
+}) {
   return (
     <Suspense>
-      <LoginFormInner />
+      <LoginFormInner allowPasswordLogin={allowPasswordLogin} />
     </Suspense>
   );
 }

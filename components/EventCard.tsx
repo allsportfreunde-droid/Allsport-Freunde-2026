@@ -50,12 +50,9 @@ export default function EventCard({
   onShowDetails,
 }: EventCardProps) {
   const config = categoryConfig[event.category];
-  const isFull = event.current_participants >= event.max_participants;
-  const percentage = Math.min(
-    100,
-    (event.current_participants / event.max_participants) * 100
-  );
-  const available = event.max_participants - event.current_participants;
+  const isFull = event.is_full ?? false;
+  const percentage = event.occupancy_percentage ?? 0;
+  const bookedPercentage = percentage;
 
   // Teaser: first sentence or first 100 chars
   const teaser = event.description
@@ -106,7 +103,7 @@ export default function EventCard({
               >
                 {isFull
                   ? "Ausgebucht"
-                  : `Noch ${available} frei`}
+                  : `${bookedPercentage}% vergeben`}
               </span>
             </div>
             <Progress
@@ -128,10 +125,9 @@ export default function EventCard({
           <Button
             className="flex-1"
             onClick={() => onRegister(event)}
-            disabled={isFull}
             variant={isFull ? "secondary" : "default"}
           >
-            {isFull ? "Ausgebucht" : "Anmelden"}
+            {isFull ? "Auf die Warteliste" : "Anmelden"}
           </Button>
         </CardFooter>
       </Card>
