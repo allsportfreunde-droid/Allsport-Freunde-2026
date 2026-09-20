@@ -64,8 +64,7 @@ async function setup() {
       status_note TEXT,
       is_walk_in BOOLEAN NOT NULL DEFAULT FALSE,
       notes TEXT,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      UNIQUE(event_id, email)
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `;
   // Migrations for existing databases
@@ -81,6 +80,12 @@ async function setup() {
   await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS stripe_session_id VARCHAR(255)`;
   await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS stripe_payment_intent_id VARCHAR(255)`;
   await sql`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS paid_person_prices JSONB`;
+  // Stornierte Anmeldungen bleiben als Zahlungs-/Erstattungshistorie erhalten.
+  // Nur gleichzeitig aktive Anmeldungen derselben E-Mail werden verhindert.
+  await sql`ALTER TABLE registrations DROP CONSTRAINT IF EXISTS registrations_event_id_email_key`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_registrations_active_event_email
+    ON registrations(event_id, email)
+    WHERE email IS NOT NULL AND status IN ('pending', 'approved')`;
   await sql`
     CREATE TABLE IF NOT EXISTS checkout_pricing (
       session_id VARCHAR(255) PRIMARY KEY,
