@@ -141,28 +141,16 @@ export async function POST(request: NextRequest) {
     const statusToken = randomUUID();
     let registrationId: number;
 
-    if (existing && existing.status === "cancelled") {
-      const rows = await sql`
-        UPDATE registrations SET
-          phone = ${phone.trim()},
-          status = 'pending',
-          is_waitlist = ${isWaitlist},
-          status_token = ${statusToken},
-          status_changed_at = NOW(),
-          status_note = NULL
-        WHERE id = ${existing.id}
-        RETURNING id
-      `;
-      registrationId = (rows[0] as { id: number }).id;
-      await sql`DELETE FROM registration_persons WHERE registration_id = ${registrationId}`;
-    } else {
-      const rows = await sql`
-        INSERT INTO registrations (event_id, email, phone, status, status_token, is_waitlist)
-        VALUES (${event_id}, ${normalizedEmail}, ${phone.trim()}, 'pending', ${statusToken}, ${isWaitlist})
-        RETURNING id
-      `;
-      registrationId = (rows[0] as { id: number }).id;
-    }
+    // Eine stornierte, bereits bezahlte Anmeldung muss als historischer
+    // Zahlungs-/Erstattungsbeleg erhalten bleiben. Würden wir denselben Datensatz
+    // reaktivieren, sähen Statusseite und Stripe-Abgleich dessen alte Zahlung und
+    // könnten die neue Anmeldung ohne neue Zahlung wieder bestätigen.
+    const rows = await sql`
+      INSERT INTO registrations (event_id, email, phone, status, status_token, is_waitlist)
+      VALUES (${event_id}, ${normalizedEmail}, ${phone.trim()}, 'pending', ${statusToken}, ${isWaitlist})
+      RETURNING id
+    `;
+    registrationId = (rows[0] as { id: number }).id;
 
     for (const p of persons) {
       // isChild kommt aus dem Toggle im Formular. Alles außer einem

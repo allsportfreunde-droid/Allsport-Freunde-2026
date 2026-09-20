@@ -19,6 +19,8 @@ const migrations = [
   // Checkout-Snapshots müssen vor Zustand, Sperren und Versandaufträgen existieren.
   "migrate-person-prices.ts",
   "migrate-checkout-fulfillment.ts",
+  // Wiederanmeldungen erhalten einen neuen Datensatz; alte Zahlungen bleiben nachvollziehbar.
+  "migrate-registration-history.ts",
 ] as const;
 
 const requiredBaseTables = ["events", "registrations", "registration_persons"] as const;
@@ -42,6 +44,7 @@ const expectedColumns = [
   "checkout_pricing.payment_intent_id",
 ] as const;
 const expectedTables = ["checkout_pricing", "checkout_notifications", "checkout_creation"] as const;
+const expectedIndexes = ["idx_registrations_active_event_email"] as const;
 
 function printPlan() {
   console.log("Release-Migrationen in dieser Reihenfolge:");
@@ -108,10 +111,19 @@ async function main() {
   const existingTables = new Set(tables.map(row => row.table_name));
   const missingTables = expectedTables.filter(table => !existingTables.has(table));
 
-  if (missingColumns.length || missingTables.length) {
+  const indexes = await sql`
+    SELECT indexname
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+  ` as Array<{ indexname: string }>;
+  const existingIndexes = new Set(indexes.map(row => row.indexname));
+  const missingIndexes = expectedIndexes.filter(index => !existingIndexes.has(index));
+
+  if (missingColumns.length || missingTables.length || missingIndexes.length) {
     throw new Error([
       missingColumns.length ? `Spalten fehlen: ${missingColumns.join(", ")}` : "",
       missingTables.length ? `Tabellen fehlen: ${missingTables.join(", ")}` : "",
+      missingIndexes.length ? `Indizes fehlen: ${missingIndexes.join(", ")}` : "",
     ].filter(Boolean).join("; "));
   }
 
