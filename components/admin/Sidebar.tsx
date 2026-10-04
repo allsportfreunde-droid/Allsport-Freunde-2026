@@ -34,6 +34,7 @@ const navSections = [
       { href: "/admin/events", label: "Events", icon: CalendarDays },
       { href: "/admin/templates", label: "Vorlagen", icon: FileText },
       { href: "/admin/registrations", label: "Anmeldungen", icon: Users },
+      { href: "/admin/teilnehmer", label: "Teilnehmer", icon: UserCheck },
       { href: "/admin/checkin", label: "Check-In", icon: ClipboardCheck },
     ],
   },

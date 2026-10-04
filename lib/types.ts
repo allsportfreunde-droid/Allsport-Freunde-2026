@@ -82,7 +82,8 @@ export function toPublicEvent(e: EventWithRegistrations): EventWithRegistrations
   // Count both approved and still-pending sign-ups towards the occupancy. A
   // pending sign-up already reserves a spot, so ignoring it made the event
   // look emptier than it really is and confused visitors. Now the public
-  // indicator reflects how many spots are effectively taken.
+  // indicator reflects how many spots are effectively taken. Wartelisten-
+  // Anmeldungen stecken nicht in pending_participants – sie belegen keinen Platz.
   const occupied = (e.current_participants ?? 0) + (e.pending_participants ?? 0);
   const max = e.max_participants ?? 0;
   const isFull = max > 0 && occupied >= max;
@@ -225,6 +226,25 @@ export interface EventPerson {
   status: RegistrationStatus;
   is_walk_in: boolean;
   created_at: string;
+}
+
+/** A person shown in the admin-wide participant list. */
+export interface ParticipantEventEntry {
+  person_id: string;
+  event_title: string;
+  event_date: string;
+  status: RegistrationStatus;
+  checked_in_at: string | null;
+  email: string | null;
+  phone: string | null;
+  is_child: boolean;
+}
+
+export interface ParticipantListItem {
+  first_name: string;
+  last_name: string;
+  count: number;
+  events: ParticipantEventEntry[];
 }
 
 export interface RegistrationStatusInfo {

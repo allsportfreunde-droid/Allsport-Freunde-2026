@@ -318,6 +318,26 @@ export async function offerWaitlistSpot(registrationId: number): Promise<boolean
   return rows.length > 0;
 }
 
+/**
+ * Gegenstück zu offerWaitlistSpot: setzt eine offene, unbezahlte Anmeldung
+ * zurück auf die Warteliste – etwa wenn jemand nicht online zahlt und den
+ * Platz sonst blockiert. Die Anmeldung bleibt 'pending', ist aber nicht mehr
+ * zahlbar und zählt nicht mehr zur Belegung.
+ *
+ * Gibt false zurück, wenn nichts zu tun war. So verschickt nur der erste
+ * Klick die Mail.
+ */
+export async function moveToWaitlist(registrationId: number): Promise<boolean> {
+  const sql = getSQL();
+  const rows = await sql`
+    UPDATE registrations
+    SET is_waitlist = TRUE
+    WHERE id = ${registrationId} AND status = 'pending' AND is_waitlist = FALSE AND paid_at IS NULL
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
 export async function approvePendingRegistration(registrationId: number): Promise<boolean> {
   const sql = getSQL();
   const rows = await sql`

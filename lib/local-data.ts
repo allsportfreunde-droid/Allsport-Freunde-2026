@@ -14,6 +14,7 @@ import type {
   EventImage,
   EventImageInput,
   EventPerson,
+  ParticipantListItem,
   CheckoutInfo,
 } from "./types";
 import { toPublicEvent } from "./types";
@@ -93,7 +94,7 @@ function recomputeParticipants(eventId: number) {
     .filter((r) => r.event_id === eventId && r.status === "approved")
     .reduce((sum, r) => sum + 1 + r.guests, 0);
   event.pending_participants = localRegistrations
-    .filter((r) => r.event_id === eventId && r.status === "pending")
+    .filter((r) => r.event_id === eventId && r.status === "pending" && !r.is_waitlist)
     .reduce((sum, r) => sum + 1 + r.guests, 0);
 }
 
@@ -223,7 +224,8 @@ export function getLocalRegistrationCount(eventId: number): number {
     .filter(
       (r) =>
         r.event_id === eventId &&
-        (r.status === "approved" || r.status === "pending")
+        (r.status === "approved" || r.status === "pending") &&
+        !r.is_waitlist
     )
     .reduce((sum, r) => sum + 1 + r.guests, 0);
 }
@@ -606,6 +608,93 @@ export function getLocalEventPersons(eventId: number): EventPerson[] {
     }
   }
   return persons;
+}
+
+export function getLocalAllParticipants(): ParticipantListItem[] {
+  const persons = localRegistrations
+    .flatMap((r) => {
+      const persons = r.persons ?? [
+        {
+          id: `local-${r.id}-0`,
+          registration_id: r.id,
+          first_name: r.first_name,
+          last_name: r.last_name,
+          is_child: false,
+          checked_in_at: r.checked_in_at,
+          cancelled_at: null,
+          created_at: r.created_at,
+        },
+        ...Array.from({ length: r.guests }, (_, index) => ({
+          id: `local-${r.id}-${index + 1}`,
+          registration_id: r.id,
+          first_name: "Begleitperson",
+          last_name: `${index + 1}`,
+          is_child: false,
+          checked_in_at: null,
+          cancelled_at: null,
+          created_at: r.created_at,
+        })),
+      ];
+
+      const event = localEvents.find((item) => item.id === r.event_id);
+      return persons.map((person) => ({
+          person_id: person.id,
+          first_name: person.first_name,
+          last_name: person.last_name,
+          event_title: event?.title ?? "Unbekanntes Event",
+          event_date: event?.date ?? "",
+          status: person.cancelled_at ? "cancelled" as const : r.status,
+          checked_in_at: person.checked_in_at,
+          email: r.email,
+          phone: r.phone,
+          is_child: person.is_child,
+        }));
+    });
+
+  const grouped = new Map<string, ParticipantListItem>();
+  for (const person of persons) {
+    const key = `${person.first_name}\u0000${person.last_name}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.count += 1;
+      existing.events.push({
+        person_id: person.person_id,
+        event_title: person.event_title,
+        event_date: person.event_date,
+        status: person.status,
+        checked_in_at: person.checked_in_at,
+        email: person.email,
+        phone: person.phone,
+        is_child: person.is_child,
+      });
+    } else {
+      grouped.set(key, {
+        first_name: person.first_name,
+        last_name: person.last_name,
+        count: 1,
+        events: [{
+          person_id: person.person_id,
+          event_title: person.event_title,
+          event_date: person.event_date,
+          status: person.status,
+          checked_in_at: person.checked_in_at,
+          email: person.email,
+          phone: person.phone,
+          is_child: person.is_child,
+        }],
+      });
+    }
+  }
+
+  return Array.from(grouped.values())
+    .map((participant) => ({
+      ...participant,
+      events: participant.events.sort((a, b) => b.event_date.localeCompare(a.event_date)),
+    }))
+    .sort((a, b) =>
+      a.last_name.localeCompare(b.last_name, "de", { sensitivity: "base" }) ||
+      a.first_name.localeCompare(b.first_name, "de", { sensitivity: "base" })
+    );
 }
 
 export function deleteLocalRegistration(id: number): void {
