@@ -33,7 +33,7 @@ export async function getEvents(): Promise<EventWithRegistrations[]> {
     SELECT
       e.id, e.title, e.category, e.description, TO_CHAR(e.date, 'YYYY-MM-DD') AS date, e.time::text AS time, e.location, e.parking_location, e.price, e.entry_price::float8 AS entry_price, e.child_entry_price::float8 AS child_entry_price, e.child_price, e.dress_code, e.max_participants, COALESCE(e.max_per_email, 5)::int AS max_per_email, TO_CHAR(e.cancellation_deadline, 'YYYY-MM-DD"T"HH24:MI') AS cancellation_deadline, e.status, e.cancellation_reason, e.published_at, e.created_at,
       COUNT(CASE WHEN r.status = 'approved' THEN rp.id ELSE NULL END)::int AS current_participants,
-      COUNT(CASE WHEN r.status = 'pending' THEN rp.id ELSE NULL END)::int AS pending_participants,
+      COUNT(CASE WHEN r.status = 'pending' AND NOT r.is_waitlist THEN rp.id ELSE NULL END)::int AS pending_participants,
       COALESCE((SELECT JSON_AGG(jsonb_build_object('id', i.id, 'event_id', i.event_id, 'url', i.url, 'alt_text', i.alt_text, 'position', i.position) ORDER BY i.position) FROM event_images i WHERE i.event_id = e.id), '[]') AS images
     FROM events e
     LEFT JOIN registrations r ON e.id = r.event_id
@@ -81,7 +81,7 @@ export async function getAllEvents(): Promise<EventWithRegistrations[]> {
     SELECT
       e.id, e.title, e.category, e.description, TO_CHAR(e.date, 'YYYY-MM-DD') AS date, e.time::text AS time, e.location, e.parking_location, e.price, e.entry_price::float8 AS entry_price, e.stripe_price_id, e.child_entry_price::float8 AS child_entry_price, e.child_price, e.stripe_child_price_id, e.dress_code, e.max_participants, e.max_per_email, e.status, e.cancellation_reason, e.published_at, e.created_at, e.survey_url, TO_CHAR(e.cancellation_deadline, 'YYYY-MM-DD"T"HH24:MI') AS cancellation_deadline,
       COUNT(CASE WHEN r.status = 'approved' THEN rp.id ELSE NULL END)::int AS current_participants,
-      COUNT(CASE WHEN r.status = 'pending' THEN rp.id ELSE NULL END)::int AS pending_participants,
+      COUNT(CASE WHEN r.status = 'pending' AND NOT r.is_waitlist THEN rp.id ELSE NULL END)::int AS pending_participants,
       COALESCE((SELECT JSON_AGG(jsonb_build_object('id', i.id, 'event_id', i.event_id, 'url', i.url, 'alt_text', i.alt_text, 'position', i.position) ORDER BY i.position) FROM event_images i WHERE i.event_id = e.id), '[]') AS images,
       COALESCE((SELECT SUM(ec.amount)::float8 FROM event_costs ec WHERE ec.event_id = e.id), 0)::float8 AS total_costs,
       COALESCE(SUM(CASE WHEN r.status = 'approved' THEN ${personRevenueSql(sql)} ELSE 0 END), 0)::float8 AS expected_revenue,
@@ -112,7 +112,7 @@ export async function getEventFull(id: number): Promise<EventWithRegistrations |
     SELECT
       e.id, e.title, e.category, e.description, TO_CHAR(e.date, 'YYYY-MM-DD') AS date, e.time::text AS time, e.location, e.parking_location, e.price, e.entry_price::float8 AS entry_price, e.stripe_price_id, e.child_entry_price::float8 AS child_entry_price, e.child_price, e.stripe_child_price_id, e.dress_code, e.max_participants, e.max_per_email, e.status, e.cancellation_reason, e.published_at, e.created_at, e.survey_url, TO_CHAR(e.cancellation_deadline, 'YYYY-MM-DD"T"HH24:MI') AS cancellation_deadline,
       COUNT(CASE WHEN r.status = 'approved' THEN rp.id ELSE NULL END)::int AS current_participants,
-      COUNT(CASE WHEN r.status = 'pending' THEN rp.id ELSE NULL END)::int AS pending_participants,
+      COUNT(CASE WHEN r.status = 'pending' AND NOT r.is_waitlist THEN rp.id ELSE NULL END)::int AS pending_participants,
       COALESCE((SELECT JSON_AGG(jsonb_build_object('id', i.id, 'event_id', i.event_id, 'url', i.url, 'alt_text', i.alt_text, 'position', i.position) ORDER BY i.position) FROM event_images i WHERE i.event_id = e.id), '[]') AS images
     FROM events e
     LEFT JOIN registrations r ON e.id = r.event_id

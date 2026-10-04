@@ -9,6 +9,7 @@ import type {
   RegistrationStatus,
   RegistrationPerson,
   EventPerson,
+  ParticipantListItem,
   CheckoutInfo,
   RefundContext,
 } from "../types";
@@ -19,6 +20,10 @@ import type {
  * has to count towards "is the event full?" – otherwise the public occupancy
  * indicator and the waitlist confirmation e-mail would disagree. Kept in sync
  * with the same definition in `toPublicEvent`.
+ *
+ * Wartelisten-Anmeldungen belegen keinen Platz – auch nicht, wenn das Team
+ * jemanden wegen fehlender Zahlung dorthin zurückgesetzt hat. Sonst bliebe
+ * das Event öffentlich "ausgebucht".
  */
 export async function getRegistrationCount(eventId: number): Promise<number> {
   if (!isPostgresConfigured()) {
@@ -31,7 +36,7 @@ export async function getRegistrationCount(eventId: number): Promise<number> {
     SELECT COUNT(rp.id)::int AS count
     FROM registrations r
     JOIN registration_persons rp ON rp.registration_id = r.id AND rp.cancelled_at IS NULL
-    WHERE r.event_id = ${eventId} AND r.status IN ('approved', 'pending')
+    WHERE r.event_id = ${eventId} AND r.status IN ('approved', 'pending') AND NOT r.is_waitlist
   `;
   return (rows[0] as { count: number }).count;
 }
@@ -313,6 +318,48 @@ export async function getEventPersons(eventId: number): Promise<EventPerson[]> {
     ORDER BY r.created_at ASC, rp.created_at ASC
   `;
   return rows as EventPerson[];
+}
+
+/**
+ * Returns participant records grouped by name, including their event and
+ * status history. The list is derived from registration_persons, so it needs
+ * no separate participant table and always reflects the registrations.
+ */
+export async function getAllParticipants(): Promise<ParticipantListItem[]> {
+  if (!isPostgresConfigured()) {
+    const { getLocalAllParticipants } = await import("../local-data");
+    return getLocalAllParticipants();
+  }
+
+  const sql = getSQL();
+  const rows = await sql`
+    SELECT
+      rp.first_name,
+      rp.last_name,
+      COUNT(*)::int AS count,
+      JSON_AGG(
+        JSON_BUILD_OBJECT(
+          'person_id', rp.id,
+          'event_title', e.title,
+          'event_date', TO_CHAR(e.date, 'YYYY-MM-DD'),
+          'checked_in_at', rp.checked_in_at,
+          'email', r.email,
+          'phone', r.phone,
+          'is_child', rp.is_child,
+          'status', CASE
+            WHEN rp.cancelled_at IS NOT NULL THEN 'cancelled'
+            ELSE r.status
+          END
+        )
+        ORDER BY e.date DESC, rp.created_at DESC
+      ) AS events
+    FROM registration_persons rp
+    JOIN registrations r ON r.id = rp.registration_id
+    JOIN events e ON e.id = r.event_id
+    GROUP BY rp.first_name, rp.last_name
+    ORDER BY LOWER(rp.last_name), LOWER(rp.first_name)
+  `;
+  return rows as ParticipantListItem[];
 }
 
 export async function deleteRegistration(id: number): Promise<void> {

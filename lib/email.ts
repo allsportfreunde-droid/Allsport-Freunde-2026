@@ -2,6 +2,7 @@ import { Resend } from "resend";
 import { RegistrationReceivedEmail } from "@/emails/registration-received";
 import { WaitlistReceivedEmail } from "@/emails/waitlist-received";
 import { WaitlistSpotOfferedEmail } from "@/emails/waitlist-spot-offered";
+import { WaitlistMovedEmail } from "@/emails/waitlist-moved";
 import { RegistrationApprovedEmail } from "@/emails/registration-approved";
 import { RegistrationRejectedEmail } from "@/emails/registration-rejected";
 import { RegistrationCancelledEmail } from "@/emails/registration-cancelled";
@@ -108,6 +109,26 @@ export async function sendWaitlistReceivedEmail(data: EmailData) {
     subject,
     data.to,
     WaitlistReceivedEmail({
+      firstName: data.firstName,
+      eventTitle: data.eventTitle,
+      eventDate: formatDateDE(data.eventDate),
+      eventTime: data.eventTime,
+      eventLocation: data.eventLocation,
+      statusUrl,
+      persons: data.persons,
+    })
+  );
+}
+
+/** Das Team hat eine unbezahlte Anmeldung zurück auf die Warteliste gesetzt. */
+export async function sendWaitlistMovedEmail(data: EmailData) {
+  const statusUrl = `${appUrl}/status/${data.statusToken}`;
+  const subject = `Du stehst jetzt auf der Warteliste – ${data.eventTitle}`;
+
+  sendEmail(
+    subject,
+    data.to,
+    WaitlistMovedEmail({
       firstName: data.firstName,
       eventTitle: data.eventTitle,
       eventDate: formatDateDE(data.eventDate),
