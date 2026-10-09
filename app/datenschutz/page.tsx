@@ -145,7 +145,7 @@ const dienste = [
         <p>
           Mit Resend besteht ein Auftragsverarbeitungsvertrag. E-Mails werden
           ausschließlich transaktional (auf direkte Nutzerinteraktion hin)
-          versendet – kein Newsletter-Versand.
+          versendet, kein Newsletter-Versand.
         </p>
         <p>
           Datenschutzerklärung:{" "}
@@ -194,7 +194,7 @@ export default function DatenschutzPage() {
             </Link>
             <h1 className="text-4xl font-bold mb-2">Datenschutzerklärung</h1>
             <p className="text-gray-400 mt-2">
-              Gemäß DSGVO und BDSG – Stand: April 2026
+              Gemäß DSGVO und BDSG, Stand: April 2026
             </p>
             <div className="w-16 h-1 bg-green-500 rounded-full mt-6" />
           </div>
@@ -369,7 +369,7 @@ export default function DatenschutzPage() {
                     lit. a
                   </span>
                   <span>
-                    <strong>Einwilligung</strong> – z. B. bei der Zustimmung zur
+                    <strong>Einwilligung</strong>: z. B. bei der Zustimmung zur
                     längeren Speicherung von Kontaktanfragen über 90 Tage hinaus.
                   </span>
                 </li>
@@ -378,7 +378,7 @@ export default function DatenschutzPage() {
                     lit. b
                   </span>
                   <span>
-                    <strong>Vertragserfüllung</strong> – Verarbeitung im Rahmen
+                    <strong>Vertragserfüllung</strong>: Verarbeitung im Rahmen
                     von Veranstaltungsanmeldungen und der Nutzung der
                     vereinseigenen Dienste.
                   </span>
@@ -388,7 +388,7 @@ export default function DatenschutzPage() {
                     lit. f
                   </span>
                   <span>
-                    <strong>Berechtigtes Interesse</strong> – z. B. für den
+                    <strong>Berechtigtes Interesse</strong>: z. B. für den
                     sicheren Betrieb der Website (Server-Logs), die Bearbeitung
                     von Kontaktanfragen und das Einlass-Management.
                   </span>

@@ -105,7 +105,7 @@ export function LastNameInput({
               aria-selected={i === activeIdx}
               onMouseDown={(e) => { e.preventDefault(); select(s); }}
               className={`px-3 py-2 cursor-pointer ${
-                i === activeIdx ? "bg-green-50 text-green-800" : "text-gray-700 hover:bg-gray-50"
+                i === activeIdx ? "bg-navy-50 text-navy-800" : "text-gray-700 hover:bg-gray-50"
               }`}
             >
               {s}

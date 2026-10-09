@@ -47,14 +47,14 @@ export async function generateMetadata({
 
   if (!event || !isShareable(event)) {
     return {
-      title: `Veranstaltung nicht verfügbar – ${SITE_NAME}`,
+      title: `Veranstaltung nicht verfügbar | ${SITE_NAME}`,
       robots: { index: false },
     };
   }
 
-  const title = `${event.title} – ${formatDate(event.date)}`;
+  const title = `${event.title} | ${formatDate(event.date)}`;
   const teaser = event.description?.trim().replace(/\s+/g, " ").slice(0, 160) ?? "";
-  const description = `${event.time} Uhr · ${event.location}${teaser ? ` – ${teaser}` : ""}`;
+  const description = `${event.time} Uhr · ${event.location}${teaser ? `. ${teaser}` : ""}`;
   // Erstes Event-Foto, sonst das Vereinslogo als Vorschaubild.
   const image = event.images?.[0]?.url ?? `${BASE_URL}/og-default.jpg`;
   const url = `${BASE_URL}/events/${event.id}`;
@@ -94,7 +94,7 @@ export default async function EventPage({
           </p>
           <Link
             href="/#events"
-            className="inline-flex items-center justify-center h-11 px-6 rounded-md bg-green-600 text-white text-sm font-medium hover:bg-green-700 transition-colors"
+            className="inline-flex items-center justify-center h-11 px-6 rounded-lg bg-navy-700 text-white text-sm font-medium hover:bg-navy-800 transition-colors"
           >
             Zu den aktuellen Events
           </Link>

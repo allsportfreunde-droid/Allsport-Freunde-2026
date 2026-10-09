@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import Footer from "@/components/Footer";
 
 export const metadata: Metadata = {
-  title: "Teilnahmebedingungen – Allsport Freunde 2026 e.V.",
+  title: "Teilnahmebedingungen | Allsport Freunde 2026 e.V.",
   description:
     "Verbindliche Teilnahmebedingungen für Veranstaltungen und Sportangebote des Allsport Freunde 2026 e.V.",
 };
@@ -42,7 +42,7 @@ export default function TeilnahmebedingungenPage() {
             </Link>
             <h1 className="text-4xl font-bold mb-2">Teilnahmebedingungen</h1>
             <p className="text-gray-400 mt-2">
-              Verbindliche Bedingungen für die Teilnahme an Veranstaltungen –
+              Verbindliche Bedingungen für die Teilnahme an Veranstaltungen,
               Stand: Mai 2025
             </p>
             <div className="w-16 h-1 bg-green-500 rounded-full mt-6" />
@@ -115,7 +115,7 @@ export default function TeilnahmebedingungenPage() {
             <ul className="text-sm leading-relaxed list-disc pl-6 space-y-2">
               <li>
                 Teilnehmende können ihre Anmeldung bis <strong>24 Stunden vor
-                Beginn</strong> der Veranstaltung selbst zurückziehen – entweder
+                Beginn</strong> der Veranstaltung selbst zurückziehen, entweder
                 vollständig oder für einzelne angemeldete Personen.
               </li>
               <li>
@@ -125,7 +125,7 @@ export default function TeilnahmebedingungenPage() {
               </li>
               <li>
                 Solange der Teilnahmebetrag noch nicht gezahlt wurde, kann die
-                Anmeldung jederzeit zurückgezogen werden – die Stornofrist gilt
+                Anmeldung jederzeit zurückgezogen werden; die Stornofrist gilt
                 erst ab dem Zeitpunkt der Zahlung.
               </li>
               <li>
@@ -155,7 +155,7 @@ export default function TeilnahmebedingungenPage() {
               <li>
                 Die Anmeldung zu einer Veranstaltung ist verbindlich. Mit der
                 Anmeldung zu einer Veranstaltung mit Unkostenbeitrag entsteht die
-                Pflicht, diesen zu entrichten – bei ausgebuchten Veranstaltungen
+                Pflicht, diesen zu entrichten, bei ausgebuchten Veranstaltungen
                 erst mit der Zuteilung eines Platzes.
               </li>
               <li>
@@ -228,9 +228,9 @@ export default function TeilnahmebedingungenPage() {
                 Vereinspersonal zu melden.
               </li>
               <li>
-                Sportartspezifische Regelungen – z.B. Hygienevorschriften beim
+                Sportartspezifische Regelungen, z.B. Hygienevorschriften beim
                 Schwimmen (Duschpflicht, Badekappe) oder Hallenregeln beim
-                Hallensport/Fußball (geeignetes Schuhwerk) – gelten ergänzend
+                Hallensport/Fußball (geeignetes Schuhwerk), gelten ergänzend
                 und werden vor Ort kommuniziert.
               </li>
               <li>

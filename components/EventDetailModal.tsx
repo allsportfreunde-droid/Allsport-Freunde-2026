@@ -5,7 +5,6 @@ import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import {
   X,
   Calendar,
@@ -23,21 +22,11 @@ import {
 import type { EventWithRegistrations } from "@/lib/types";
 import ImageCarousel from "./ImageCarousel";
 import { formatEventPrice } from "@/lib/price";
+import { CATEGORY_CONFIG } from "@/lib/categories";
+import OccupancyMeter from "./OccupancyMeter";
 
 // Leaflet must only run client-side (no SSR)
 const LeafletMap = dynamic(() => import("./LeafletMap"), { ssr: false });
-
-const categoryConfig = {
-  fussball: { label: "Fußball ⚽", variant: "fussball" as const },
-  fitness: { label: "Fitness 💪", variant: "fitness" as const },
-  schwimmen: { label: "Schwimmen 🏊", variant: "schwimmen" as const },
-};
-
-const progressColors: Record<string, string> = {
-  fussball: "bg-green-500",
-  fitness: "bg-orange-500",
-  schwimmen: "bg-blue-500",
-};
 
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr + "T00:00:00");
@@ -106,10 +95,9 @@ export default function EventDetailModal({
 
   if (!event) return null;
 
-  const config = categoryConfig[event.category];
+  const config = CATEGORY_CONFIG[event.category];
   const isFull = event.is_full ?? false;
   const percentage = event.occupancy_percentage ?? 0;
-  const bookedPercentage = percentage;
   const hasImages = (event.images?.length ?? 0) > 0;
 
   // Teilen: auf dem Handy die System-Auswahl (WhatsApp, Signal, …),
@@ -120,7 +108,7 @@ export default function EventDetailModal({
       try {
         await navigator.share({
           title: event.title,
-          text: `${event.title} – ${formatDate(event.date)}, ${event.time} Uhr`,
+          text: `${event.title}: ${formatDate(event.date)}, ${event.time} Uhr`,
           url,
         });
       } catch {
@@ -182,7 +170,7 @@ export default function EventDetailModal({
                 {/* Header */}
                 <div className="space-y-2">
                   <Badge variant={config.variant}>{config.label}</Badge>
-                  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 leading-tight">
+                  <h2 className="font-display text-3xl sm:text-4xl font-bold uppercase tracking-tight text-navy-700 leading-none">
                     {event.title}
                   </h2>
                   <div className="flex flex-wrap gap-4 text-sm text-gray-600 mt-1">
@@ -219,7 +207,7 @@ export default function EventDetailModal({
                     {/* Venue map */}
                     <div className="space-y-2">
                       <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
-                        <MapPin className="w-4 h-4 text-green-600" />
+                        <MapPin className="w-4 h-4 text-navy-500" />
                         <span>Veranstaltungsort</span>
                       </div>
                       <div className="h-52 rounded-lg overflow-hidden border border-gray-200">
@@ -250,7 +238,7 @@ export default function EventDetailModal({
                     {event.parking_location && (
                       <div className="space-y-2">
                         <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
-                          <Car className="w-4 h-4 text-blue-600" />
+                          <Car className="w-4 h-4 text-navy-500" />
                           <span>Parkplatz</span>
                         </div>
                         <div className="h-52 rounded-lg overflow-hidden border border-gray-200">
@@ -288,13 +276,13 @@ export default function EventDetailModal({
                 {/* Info blocks */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <InfoBlock
-                    icon={<Euro className="w-4 h-4 text-amber-600" />}
+                    icon={<Euro className="w-4 h-4 text-navy-500" />}
                     label="Kosten"
                     value={formatEventPrice(event)}
                   />
                   {event.dress_code && (
                     <InfoBlock
-                      icon={<Shirt className="w-4 h-4 text-purple-600" />}
+                      icon={<Shirt className="w-4 h-4 text-navy-500" />}
                       label="Ausrüstung / Kleidung"
                       value={event.dress_code}
                     />
@@ -309,32 +297,19 @@ export default function EventDetailModal({
                       Verfügbarkeit
                     </span>
                   </div>
-                  <div className="flex justify-between text-sm mb-1.5">
-                    <span className="text-gray-500">Belegung</span>
-                    <span
-                      className={`font-medium ${
-                        isFull ? "text-red-600" : "text-gray-700"
-                      }`}
-                    >
-                      {isFull ? "Ausgebucht" : `${bookedPercentage}% vergeben`}
-                    </span>
-                  </div>
-                  <Progress
-                    value={percentage}
-                    indicatorClassName={
-                      isFull
-                        ? "bg-red-500"
-                        : progressColors[event.category]
-                    }
+                  <OccupancyMeter
+                    percentage={percentage}
+                    isFull={isFull}
+                    barColor={config.barColor}
                   />
                   {!isFull ? (
                     <p className="text-xs text-green-700 font-medium">
                       Es sind noch Plätze verfügbar
                     </p>
                   ) : (
-                    <p className="text-xs text-amber-700 font-medium">
+                    <p className="text-xs text-orange-800 font-medium">
                       Dieses Event ist ausgebucht. Trage dich in die Warteliste
-                      ein – wir benachrichtigen dich, sobald ein Platz frei wird.
+                      ein. Wir benachrichtigen dich, sobald ein Platz frei wird.
                     </p>
                   )}
                 </div>
@@ -349,7 +324,7 @@ export default function EventDetailModal({
                       onRegister(event);
                     }}
                   >
-                    {isFull ? "In die Warteliste einschreiben" : "Jetzt anmelden"}
+                    {isFull ? "Auf die Warteliste" : "Anmelden"}
                   </Button>
                   <Button
                     variant="outline"
@@ -377,14 +352,14 @@ export default function EventDetailModal({
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-full h-11 border-green-200 text-green-700 hover:bg-green-50 hover:border-green-400 hover:text-green-800 transition-colors"
+                    className="w-full h-11 text-navy-700"
                     onClick={() => {
                       onClose();
                       onContact(event.id);
                     }}
                   >
                     <MessageSquare className="w-4 h-4 mr-2" />
-                    Noch Fragen? Schreib uns an! 🎯
+                    Kontakt aufnehmen
                   </Button>
                 )}
               </div>
@@ -409,7 +384,7 @@ function InfoBlock({
     <div className="flex items-start gap-3 rounded-lg bg-gray-50 border border-gray-100 p-3">
       <span className="mt-0.5 shrink-0">{icon}</span>
       <div>
-        <p className="text-xs text-gray-500 font-medium uppercase tracking-wide mb-0.5">
+        <p className="text-xs text-gray-500 font-medium mb-0.5">
           {label}
         </p>
         <p className="text-sm text-gray-800">{value}</p>

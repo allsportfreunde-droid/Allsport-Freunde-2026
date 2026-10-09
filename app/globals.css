@@ -1,27 +1,151 @@
 @import "tailwindcss";
 
+/*
+ * Brand palette (Allsport Freunde). The green / orange / neutral scales
+ * deliberately replace Tailwind's defaults so that existing utilities like
+ * `text-green-700` pick up the brand colors everywhere, including admin.
+ *
+ * Contrast rules:
+ *   - Orange fills always carry navy-900 text (white on orange-500 is 2.4:1).
+ *   - Green is never a button fill with white text (2.5:1). Green text uses
+ *     green-700 or darker; the only exception is display-size type (3:1 is
+ *     enough there).
+ *
+ * Color roles: navy = base and actions, orange = the single accent (primary
+ * CTA only), green = success states, the Fußball category, and the second
+ * word of the hero H1, mirroring the navy/green ALLSPORT FREUNDE lockup.
+ *   - Muted text on neutral-50 surfaces uses neutral-600 (neutral-500 is 4.4:1).
+ *
+ * Radius rule: buttons / inputs 8px (rounded-lg), chips / badges pill,
+ * cards / modals / images 16px (rounded-2xl).
+ */
 @theme {
-  --color-primary: #16a34a;
+  /* Neutral */
+  --color-neutral-0: #ffffff;
+  --color-neutral-50: #f7f8fa;
+  --color-neutral-100: #edeff3;
+  --color-neutral-200: #dee2e9;
+  --color-neutral-300: #c7cdd9;
+  --color-neutral-400: #9aa3b4;
+  --color-neutral-500: #6b7488;
+  --color-neutral-600: #4c5468;
+  --color-neutral-700: #363d4e;
+  --color-neutral-800: #232937;
+  --color-neutral-900: #141824;
+
+  /* Navy */
+  --color-navy-50: #f2f5fa;
+  --color-navy-100: #e1e8f2;
+  --color-navy-200: #c2cee3;
+  --color-navy-300: #97a9cc;
+  --color-navy-400: #5e74a3;
+  --color-navy-500: #35508c;
+  --color-navy-600: #26406e;
+  --color-navy-700: #1b2c54;
+  --color-navy-800: #142140;
+  --color-navy-900: #0d162c;
+
+  /* Green (900 extrapolated from the brand scale, used by existing dark badges) */
+  --color-green-50: #f4f8ec;
+  --color-green-100: #e6f1d5;
+  --color-green-200: #cfe3af;
+  --color-green-300: #afd07e;
+  --color-green-400: #96c763;
+  --color-green-500: #7cb342;
+  --color-green-600: #689a33;
+  --color-green-700: #517a28;
+  --color-green-800: #3c5a1f;
+  --color-green-900: #2a3f16;
+
+  /* Orange (900 extrapolated from the brand scale) */
+  --color-orange-50: #fef5e9;
+  --color-orange-100: #fde7cc;
+  --color-orange-200: #fbcf98;
+  --color-orange-300: #f8b061;
+  --color-orange-400: #f5a03f;
+  --color-orange-500: #f39121;
+  --color-orange-600: #dc7c12;
+  --color-orange-700: #b4620c;
+  --color-orange-800: #854809;
+  --color-orange-900: #5a3106;
+
+  /* Danger */
+  --color-danger: #d64545;
+  --color-danger-50: #fbebeb;
+  --color-danger-100: #f6d4d4;
+  --color-danger-600: #be3535;
+  --color-danger-700: #9a2a2a;
+
+  /* Semantic tokens used by the shared UI primitives */
+  --color-primary: #1b2c54; /* navy-700 */
   --color-primary-foreground: #ffffff;
-  --color-fussball: #16a34a;
-  --color-fitness: #ea580c;
-  --color-schwimmen: #2563eb;
+  --color-brand-accent: #f39121; /* orange-500 */
+  --color-brand-accent-foreground: #0d162c; /* navy-900 */
+  --color-fussball: #7cb342; /* green-500 */
+  --color-fitness: #f39121; /* orange-500 */
+  --color-schwimmen: #35508c; /* navy-500 */
   --color-background: #ffffff;
-  --color-foreground: #0a0a0a;
-  --color-muted: #f5f5f5;
-  --color-muted-foreground: #737373;
-  --color-border: #e5e5e5;
-  --color-ring: #16a34a;
+  --color-foreground: #141824; /* neutral-900 */
+  --color-muted: #edeff3; /* neutral-100 */
+  --color-muted-foreground: #6b7488; /* neutral-500 */
+  --color-border: #dee2e9; /* neutral-200 */
+  --color-input: #6b7488; /* neutral-500: form field borders need 3:1 (WCAG 1.4.11) */
+  --color-ring: #35508c; /* navy-500 */
   --color-card: #ffffff;
-  --color-card-foreground: #0a0a0a;
-  --color-destructive: #dc2626;
-  --color-accent: #f5f5f5;
-  --color-accent-foreground: #0a0a0a;
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-card-foreground: #141824;
+  --color-destructive: #be3535; /* danger-600 */
+  --color-accent: #edeff3; /* hover surface, see shadcn convention */
+  --color-accent-foreground: #141824;
+
+  /* Body stays on the system stack (what visitors saw before). Headlines use
+     Barlow Condensed, which echoes the condensed lettering of the logo. */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-display: var(--font-barlow-condensed), ui-sans-serif, system-ui,
+    sans-serif;
+
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
   --radius-xl: 0.75rem;
+
+  /* Hero load-in. Pure CSS so the content is visible without JS; always used
+     behind `motion-safe:` so reduced-motion visitors get no movement. */
+  --animate-rise: rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(1rem);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
+/* Event cards fade up as they scroll into view. Scroll-driven CSS, so no JS
+   on the critical path; browsers without support simply show the cards. */
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(1.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@utility reveal-on-scroll {
+  @media (prefers-reduced-motion: no-preference) {
+    @supports (animation-timeline: view()) {
+      animation: reveal linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 60%;
+    }
+  }
 }
 
 /* Hide the native scrollbar while keeping the element scrollable
@@ -35,7 +159,14 @@
 }
 
 html {
-  scroll-behavior: smooth;
+  /* Keeps anchor targets (#events, #infos, ...) clear of the sticky header. */
+  scroll-padding-top: 5rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
 }
 
 body {

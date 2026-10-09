@@ -6,7 +6,6 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from "@/components/ui/accordion";
-import { motion } from "framer-motion";
 
 const faqs = [
   {
@@ -17,12 +16,12 @@ const faqs = [
   {
     question: "Kostet die Teilnahme etwas?",
     answer:
-      "Viele unserer Events sind komplett kostenlos. Bei einigen Events fällt ein kleiner Unkostenbeitrag an, z.B. für Hallenbad-Eintritt. Die genauen Kosten findest du bei jedem Event. Unser Ziel ist es, Sport für alle zugänglich zu machen – Geld soll kein Hindernis sein. Sprich uns an, wenn du Fragen hast.",
+      "Viele unserer Events sind komplett kostenlos. Bei einigen Events fällt ein kleiner Unkostenbeitrag an, z.B. für Hallenbad-Eintritt. Die genauen Kosten findest du bei jedem Event. Unser Ziel ist es, Sport für alle zugänglich zu machen. Geld soll kein Hindernis sein. Sprich uns an, wenn du Fragen hast.",
   },
   {
     question: "Für wen sind die Events geeignet?",
     answer:
-      "Unsere Events richten sich an alle – unabhängig von Alter, Geschlecht, Herkunft oder sportlicher Erfahrung. Ob Anfänger oder Fortgeschrittene: Bei uns findet jeder das passende Angebot. Kinder sind in Begleitung eines Erwachsenen herzlich willkommen.",
+      "Unsere Events richten sich an alle, unabhängig von Alter, Geschlecht, Herkunft oder sportlicher Erfahrung. Ob Anfänger oder Fortgeschrittene: Bei uns findet jeder das passende Angebot. Kinder sind in Begleitung eines Erwachsenen herzlich willkommen.",
   },
   {
     question: "Wie kann ich den Verein unterstützen?",
@@ -38,36 +37,32 @@ const faqs = [
 
 export default function GeneralInfo() {
   return (
-    <section id="infos" className="py-20 px-4 bg-white">
-      <div className="max-w-3xl mx-auto">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: "-100px" }}
-          transition={{ duration: 0.6 }}
-          className="text-center mb-12"
-        >
-          <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
+    <section id="infos" className="bg-neutral-50 py-16 md:py-24">
+      <div className="mx-auto grid max-w-7xl grid-cols-1 gap-8 px-4 sm:px-6 lg:grid-cols-12 lg:gap-16 lg:px-8">
+        <div className="lg:col-span-4">
+          <h2 className="font-display text-4xl font-bold uppercase leading-none tracking-tight text-navy-700 md:text-5xl lg:sticky lg:top-28">
             Häufige Fragen
           </h2>
-          <div className="w-16 h-1 bg-green-500 mx-auto mb-8 rounded-full" />
-        </motion.div>
+        </div>
 
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: "-100px" }}
-          transition={{ duration: 0.6, delay: 0.1 }}
-        >
-          <Accordion>
+        <div className="lg:col-span-8">
+          <Accordion className="space-y-0 border-t border-neutral-200">
             {faqs.map((faq, index) => (
-              <AccordionItem key={index} defaultOpen={index === 0}>
-                <AccordionTrigger>{faq.question}</AccordionTrigger>
-                <AccordionContent>{faq.answer}</AccordionContent>
+              <AccordionItem
+                key={index}
+                defaultOpen={index === 0}
+                className="rounded-none border-x-0 border-t-0 border-neutral-200"
+              >
+                <AccordionTrigger className="gap-4 rounded-none px-0 py-5 text-base font-semibold text-navy-700 hover:bg-transparent hover:text-navy-500 md:text-lg">
+                  {faq.question}
+                </AccordionTrigger>
+                <AccordionContent className="max-w-[65ch] px-0 pb-6 text-base leading-relaxed text-neutral-600">
+                  {faq.answer}
+                </AccordionContent>
               </AccordionItem>
             ))}
           </Accordion>
-        </motion.div>
+        </div>
       </div>
     </section>
   );

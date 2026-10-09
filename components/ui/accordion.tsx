@@ -55,6 +55,7 @@ function AccordionTrigger({
     <button
       type="button"
       onClick={onToggle}
+      aria-expanded={open}
       className={cn(
         "flex w-full items-center justify-between px-4 py-4 text-left font-medium transition-all hover:bg-muted/50 rounded-lg cursor-pointer",
         className

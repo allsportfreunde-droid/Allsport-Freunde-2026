@@ -236,8 +236,8 @@ export default function ContactFormModal({
                   <>
                     {/* Header */}
                     <div className="flex items-center gap-3 mb-6">
-                      <div className="flex items-center justify-center w-10 h-10 rounded-full bg-green-100">
-                        <MessageSquare className="w-5 h-5 text-green-600" />
+                      <div className="flex items-center justify-center w-10 h-10 rounded-full bg-navy-50">
+                        <MessageSquare className="w-5 h-5 text-navy-700" />
                       </div>
                       <div>
                         <h2 className="text-xl font-bold text-gray-900">Kontakt</h2>
@@ -325,7 +325,7 @@ export default function ContactFormModal({
                             name="event_id"
                             value={form.event_id}
                             onChange={handleChange}
-                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
                           >
                             <option value="">Keine Veranstaltung</option>
                             {events.map((ev) => (
@@ -365,7 +365,7 @@ export default function ContactFormModal({
                           name="consent_to_store"
                           checked={form.consent_to_store}
                           onChange={handleChange}
-                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                          className="mt-0.5 h-4 w-4 rounded border-gray-300 accent-navy-700"
                         />
                         <span className="text-xs text-gray-500 leading-relaxed">
                           Ich willige ein, dass meine Kontaktdaten über 90 Tage hinaus gespeichert
@@ -428,7 +428,7 @@ function SuccessView({
       {conversationToken && (
         <a
           href={`/conversation/${conversationToken}`}
-          className="inline-flex items-center gap-1.5 text-sm text-green-700 hover:text-green-800 underline underline-offset-2"
+          className="inline-flex items-center gap-1.5 text-sm text-navy-700 hover:text-navy-500 underline underline-offset-2"
         >
           Anfrage verfolgen
         </a>

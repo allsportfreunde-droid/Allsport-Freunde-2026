@@ -1,70 +1,43 @@
-"use client";
-
-import { Button } from "@/components/ui/button";
-import { motion } from "framer-motion";
+import Image from "next/image";
+import { buttonVariants } from "@/components/ui/button";
+import { SITE_IMAGES } from "@/lib/site";
 
 export default function Hero() {
-  const scrollToEvents = () => {
-    document.getElementById("events")?.scrollIntoView({ behavior: "smooth" });
-  };
-
   return (
-    <section className="relative min-h-[90vh] flex items-center justify-center overflow-hidden bg-gradient-to-br from-green-600 via-green-700 to-emerald-800">
-      {/* Decorative elements */}
-      <div className="absolute inset-0 opacity-10">
-        <div className="absolute top-20 left-10 w-72 h-72 bg-white rounded-full blur-3xl" />
-        <div className="absolute bottom-20 right-10 w-96 h-96 bg-white rounded-full blur-3xl" />
-      </div>
+    <section id="top" className="bg-white">
+      <div className="mx-auto grid max-w-7xl grid-cols-1 items-center gap-10 px-4 pb-12 pt-10 sm:px-6 md:pt-14 lg:grid-cols-12 lg:gap-14 lg:px-8 lg:pb-14 lg:pt-14">
+        <div className="lg:col-span-6">
+          <h1 className="font-display text-6xl font-bold uppercase leading-[0.92] tracking-tight text-navy-700 motion-safe:animate-rise sm:text-7xl lg:text-8xl">
+            Sport <span className="text-green-600">verbindet.</span>
+          </h1>
 
-      <div className="relative z-10 text-center px-4 max-w-4xl mx-auto">
-        <motion.div
-          initial={{ opacity: 0, y: 30 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8 }}
-        >
-          <div className="mb-8">
-            <img 
-              src="/logo.svg" 
-              alt="Allsport Freunde Logo" 
-              className="w-64 h-64 md:w-80 md:h-80 lg:w-112 lg:h-112 mx-auto drop-shadow-lg"
+          <p className="mt-6 max-w-lg text-lg leading-relaxed text-neutral-600 motion-safe:animate-rise motion-safe:[animation-delay:120ms] md:text-xl">
+            Menschen. Kulturen. Generationen. Gemeinsam bewegen wir die{" "}
+            <span className="whitespace-nowrap">Rhein-Main-Region.</span>
+          </p>
+
+          <div className="mt-9 flex flex-wrap items-center gap-3 motion-safe:animate-rise motion-safe:[animation-delay:240ms]">
+            <a href="#events" className={buttonVariants({ variant: "accent", size: "lg", className: "h-12 px-7" })}>
+              Zu den Events
+            </a>
+            <a href="#ueber-uns" className={buttonVariants({ variant: "outline", size: "lg", className: "h-12 px-7 text-navy-700" })}>
+              Über uns
+            </a>
+          </div>
+        </div>
+
+        <div className="lg:col-span-6">
+          <div className="relative aspect-video overflow-hidden sm:aspect-4/3 lg:aspect-3/2 rounded-2xl bg-navy-100 shadow-[0_24px_60px_-24px_rgb(27_44_84/0.35)]">
+            <Image
+              src={SITE_IMAGES.hero.src}
+              alt={SITE_IMAGES.hero.alt}
+              fill
+              sizes="(min-width: 1024px) 50vw, 100vw"
+              className="object-cover"
+              preload
             />
           </div>
-        </motion.div>
-
-        <motion.p
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.2 }}
-          className="text-lg md:text-xl text-green-100 mb-8 max-w-2xl mx-auto"
-        >
-          Sport verbindet. Menschen. Kulturen. Generationen.
-          <br />
-          Gemeinsam bewegen wir die Rhein-Main-Region.
-        </motion.p>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.4 }}
-        >
-          <Button
-            size="lg"
-            onClick={scrollToEvents}
-            className="bg-white text-green-700 hover:bg-green-50 text-lg px-8 py-6 rounded-full font-semibold shadow-lg hover:shadow-xl transition-all"
-          >
-            Zu den Events
-          </Button>
-        </motion.div>
-      </div>
-
-      {/* Bottom wave */}
-      <div className="absolute bottom-0 left-0 right-0">
-        <svg viewBox="0 0 1440 120" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path
-            d="M0 120L60 105C120 90 240 60 360 52.5C480 45 600 60 720 67.5C840 75 960 75 1080 67.5C1200 60 1320 45 1380 37.5L1440 30V120H1380C1320 120 1200 120 1080 120C960 120 840 120 720 120C600 120 480 120 360 120C240 120 120 120 60 120H0Z"
-            fill="white"
-          />
-        </svg>
+        </div>
       </div>
     </section>
   );

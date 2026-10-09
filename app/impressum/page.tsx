@@ -4,7 +4,7 @@ import { ArrowLeft, Mail, Phone, MapPin } from "lucide-react";
 import Footer from "@/components/Footer";
 
 export const metadata: Metadata = {
-  title: "Impressum – Allsport Freunde 2026 e.V.",
+  title: "Impressum | Allsport Freunde 2026 e.V.",
   description: "Pflichtangaben gemäß § 5 TMG des Allsport Freunde 2026 e.V.",
 };
 

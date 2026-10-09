@@ -269,12 +269,12 @@ export default function RegistrationModal({
                 href={`/status/${statusToken}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-sm text-blue-600 hover:underline block mb-4"
+                className="text-sm text-navy-600 hover:underline block mb-4"
               >
                 Status deiner Anmeldung ansehen
               </a>
             )}
-            <Button onClick={() => handleClose(false)} className="rounded-full">
+            <Button onClick={() => handleClose(false)}>
               Schließen
             </Button>
           </div>
@@ -286,7 +286,7 @@ export default function RegistrationModal({
               </DialogTitle>
               <DialogDescription>
                 {isFull
-                  ? "Dieses Event ist ausgebucht. Trage dich in die Warteliste ein – wir benachrichtigen dich, sobald ein Platz frei wird."
+                  ? "Dieses Event ist ausgebucht. Trage dich in die Warteliste ein. Wir benachrichtigen dich, sobald ein Platz frei wird."
                   : "Fülle das Formular aus, um dich für dieses Event anzumelden."}
               </DialogDescription>
             </DialogHeader>
@@ -388,7 +388,7 @@ export default function RegistrationModal({
                             maxLength={50}
                             onChange={(v) => updatePerson(idx, "lastName", v)}
                             siblings={persons.filter((_, i) => i !== idx).map((p) => p.lastName)}
-                            className="flex h-10 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="flex h-10 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                           />
                         </div>
                       </div>
@@ -413,8 +413,8 @@ export default function RegistrationModal({
                             aria-checked={person.isChild}
                             aria-labelledby={`child-label-${idx}`}
                             onClick={() => updatePerson(idx, "isChild", !person.isChild)}
-                            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2 ${
-                              person.isChild ? "bg-green-600" : "bg-gray-300"
+                            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+                              person.isChild ? "bg-navy-700" : "bg-gray-300"
                             }`}
                           >
                             <span
@@ -441,7 +441,7 @@ export default function RegistrationModal({
                   <button
                     type="button"
                     onClick={addPerson}
-                    className="w-full flex items-center justify-center gap-2 py-2 border border-dashed border-gray-300 rounded-lg text-sm text-gray-500 hover:border-green-400 hover:text-green-600 hover:bg-green-50 transition-colors"
+                    className="w-full flex items-center justify-center gap-2 py-2 border border-dashed border-gray-300 rounded-lg text-sm text-gray-500 hover:border-navy-400 hover:text-navy-700 hover:bg-navy-50 transition-colors"
                   >
                     <Plus className="w-4 h-4" />
                     Person hinzufügen
@@ -456,7 +456,7 @@ export default function RegistrationModal({
                   id="accepted"
                   checked={accepted}
                   onChange={(e) => setAccepted(e.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500 cursor-pointer"
+                  className="mt-1 h-4 w-4 rounded border-gray-300 accent-navy-700 cursor-pointer"
                 />
                 <Label htmlFor="accepted" className="text-sm text-gray-600 cursor-pointer">
                   Ich akzeptiere die{" "}
