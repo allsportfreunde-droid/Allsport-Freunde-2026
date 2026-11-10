@@ -20,6 +20,7 @@ import {
   ChevronLeft,
   ChevronRight,
   UserCheck,
+  Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -36,6 +37,7 @@ const navSections = [
       { href: "/admin/registrations", label: "Anmeldungen", icon: Users },
       { href: "/admin/teilnehmer", label: "Teilnehmer", icon: UserCheck },
       { href: "/admin/checkin", label: "Check-In", icon: ClipboardCheck },
+      { href: "/admin/reviews", label: "Reviews", icon: Star },
     ],
   },
   {
