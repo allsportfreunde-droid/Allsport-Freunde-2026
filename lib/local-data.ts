@@ -16,8 +16,10 @@ import type {
   EventPerson,
   ParticipantListItem,
   CheckoutInfo,
+  EventStripeCatalog,
 } from "./types";
 import { toPublicEvent } from "./types";
+import type { EventPriceBasis } from "./db/events";
 
 const NOW = new Date().toISOString();
 const seedEvents: EventWithRegistrations[] = [
@@ -546,9 +548,36 @@ export function updateLocalEvent(id: number, data: EventCreateInput): void {
   const event = localEvents.find((e) => e.id === id);
   if (event) {
     const { images, ...eventFields } = data;
+    // Wie in Postgres: neue Preisgrundlage ⇒ alte Price IDs fallen weg.
+    const basis = { price: data.price, entry_price: data.entry_price, child_entry_price: data.child_entry_price };
+    if (!hasLocalPriceBasis(event, basis)) {
+      Object.assign(event, { ...emptyLocalPriceIds });
+    }
     Object.assign(event, eventFields);
     if (images !== undefined) setLocalEventImages(id, images);
   }
+}
+
+const emptyLocalPriceIds: Omit<EventStripeCatalog, "stripe_product_id"> = {
+  stripe_price_id: null,
+  stripe_child_price_id: null,
+  stripe_adult_reduced_30_price_id: null,
+  stripe_adult_reduced_50_price_id: null,
+  stripe_child_reduced_30_price_id: null,
+  stripe_child_reduced_50_price_id: null,
+};
+
+function hasLocalPriceBasis(event: EventWithRegistrations, basis: EventPriceBasis): boolean {
+  return event.price === basis.price &&
+    (event.entry_price ?? null) === (basis.entry_price ?? null) &&
+    (event.child_entry_price ?? null) === (basis.child_entry_price ?? null);
+}
+
+export function saveLocalEventStripeCatalog(id: number, catalog: EventStripeCatalog, basis: EventPriceBasis): boolean {
+  const event = localEvents.find((e) => e.id === id);
+  if (!event || !hasLocalPriceBasis(event, basis)) return false;
+  Object.assign(event, catalog);
+  return true;
 }
 
 export function deleteLocalEvent(id: number): void {

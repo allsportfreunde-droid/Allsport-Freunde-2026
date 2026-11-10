@@ -2,9 +2,9 @@ import { getAllEvents, createEvent } from "@/lib/db";
 import { invalidateCache } from "@/lib/cache";
 import { NextRequest, NextResponse } from "next/server";
 import type { EventCreateInput } from "@/lib/types";
-import { normalizePrice, normalizeStripePriceId } from "@/lib/price";
+import { normalizeManualChildPrice, normalizePrice } from "@/lib/price";
 import { validateCancellationDeadline } from "@/lib/cancellation";
-import { resolveChildPrice } from "@/lib/child-price";
+import { syncStoredEventCatalog } from "@/lib/stripe-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -43,9 +43,9 @@ export async function POST(request: NextRequest) {
     const price = normalizePrice(body);
     let childPrice;
     try {
-      childPrice = await resolveChildPrice(body);
+      childPrice = normalizeManualChildPrice(body);
     } catch (error) {
-      return NextResponse.json({ error: error instanceof Error ? error.message : "Kinderpreis konnte nicht geladen werden." }, { status: 400 });
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Ungültiger Kinderpreis." }, { status: 400 });
     }
     const result = await createEvent({
       title: body.title.trim(),
@@ -57,7 +57,6 @@ export async function POST(request: NextRequest) {
       parking_location: body.parking_location?.trim() || undefined,
       price: price.price,
       entry_price: price.entry_price,
-      stripe_price_id: normalizeStripePriceId(body.stripe_price_id, price.entry_price),
       ...childPrice,
       dress_code: (body.dress_code || "").trim(),
       max_participants: body.max_participants,
@@ -69,7 +68,10 @@ export async function POST(request: NextRequest) {
 
     // Neues Event kann die öffentliche Liste verändern → Cache invalidieren
     invalidateCache("events:");
-    return NextResponse.json({ message: "Event erstellt!", id: result.id }, { status: 201 });
+    // Produkt und Preise in Stripe anlegen. Scheitert das, ist das Event
+    // trotzdem gespeichert – das Formular zeigt dann eine Warnung.
+    const stripe = await syncStoredEventCatalog(result.id);
+    return NextResponse.json({ message: "Event erstellt!", id: result.id, stripe }, { status: 201 });
   } catch (error) {
     console.error("Fehler beim Erstellen des Events:", error);
     return NextResponse.json({ error: "Event konnte nicht erstellt werden." }, { status: 500 });

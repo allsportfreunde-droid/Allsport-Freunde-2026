@@ -4,7 +4,7 @@ import { POST } from "../app/api/checkout/route";
 import type { CheckoutInfo, EventCreateInput } from "../lib/types";
 import {
   createLocalEvent, createLocalWalkInRegistration, getLocalCheckoutInfo,
-  getLocalRegistrationByToken, resetLocalData, updateLocalEvent,
+  getLocalRegistrationByToken, resetLocalData, saveLocalEventStripeCatalog, updateLocalEvent,
 } from "../lib/local-data";
 
 const { checkoutInfo, createSession, stripeClient, savePricing } = vi.hoisted(() => ({
@@ -149,10 +149,16 @@ describe("Checkout mit Erwachsenen und Kindern", () => {
     const event: EventCreateInput = {
       title: "Sport", category: "fussball", description: "", date: "2099-06-01", time: "12:00",
       location: "Halle", dress_code: "Sport", max_participants: 10,
-      price: "10 €", entry_price: 10, stripe_price_id: "price_adult",
-      child_entry_price: 4, stripe_child_price_id: "price_child",
+      price: "10 €", entry_price: 10, child_entry_price: 4,
     };
     const { id } = createLocalEvent(event);
+    // Stellvertretend für den Stripe-Abgleich nach dem Speichern.
+    const catalog = (child: string) => ({
+      stripe_product_id: "prod_event", stripe_price_id: "price_adult", stripe_child_price_id: child,
+      stripe_adult_reduced_30_price_id: null, stripe_adult_reduced_50_price_id: null,
+      stripe_child_reduced_30_price_id: null, stripe_child_reduced_50_price_id: null,
+    });
+    expect(saveLocalEventStripeCatalog(id, catalog("price_child"), event)).toBe(true);
     const registration = createLocalWalkInRegistration({
       event_id: id, email: "test@example.com", phone: null, notes: null, checked_in_by: null,
       persons: [
@@ -168,9 +174,18 @@ describe("Checkout mit Erwachsenen und Kindern", () => {
       { price: "price_adult", quantity: 1 }, { price: "price_child", quantity: 1 },
     ]);
     // Die Anmeldung bleibt bestehen; der nächste Checkout nutzt den geänderten Eventpreis.
-    updateLocalEvent(id, { ...event, child_entry_price: 2, stripe_child_price_id: "price_new" });
+    // Bis der Abgleich neue IDs liefert, zeigt keine ID auf den alten Betrag.
+    updateLocalEvent(id, { ...event, child_entry_price: 2 });
     await POST(request({ status_token: registration.status_token }));
     expect(createSession.mock.calls[1][0].line_items).toEqual([
+      expect.objectContaining({ price_data: expect.objectContaining({ unit_amount: 1000 }), quantity: 1 }),
+      expect.objectContaining({ price_data: expect.objectContaining({ unit_amount: 200 }), quantity: 1 }),
+    ]);
+    // Ein Abgleich zum alten Betrag wird verworfen, der zum neuen übernommen.
+    expect(saveLocalEventStripeCatalog(id, catalog("price_child"), event)).toBe(false);
+    expect(saveLocalEventStripeCatalog(id, catalog("price_new"), { ...event, child_entry_price: 2 })).toBe(true);
+    await POST(request({ status_token: registration.status_token }));
+    expect(createSession.mock.calls[2][0].line_items).toEqual([
       { price: "price_adult", quantity: 1 }, { price: "price_new", quantity: 1 },
     ]);
     expect(getLocalRegistrationByToken(registration.status_token)!.event_child_entry_price).toBe(2);

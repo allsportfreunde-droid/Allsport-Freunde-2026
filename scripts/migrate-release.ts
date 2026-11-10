@@ -9,6 +9,7 @@ const migrations = [
   // Event-Felder, auf die Checkout und Anzeige anschließend zugreifen.
   "migrate-stripe.ts",
   "migrate-child-price.ts",
+  "migrate-stripe-catalog.ts",
   "migrate-cancellation.ts",
   // Registrierungszustand und Zahlungsreferenzen.
   "migrate-waitlist.ts",
@@ -29,6 +30,11 @@ const expectedColumns = [
   "events.child_entry_price",
   "events.stripe_child_price_id",
   "events.child_price",
+  "events.stripe_product_id",
+  "events.stripe_adult_reduced_30_price_id",
+  "events.stripe_adult_reduced_50_price_id",
+  "events.stripe_child_reduced_30_price_id",
+  "events.stripe_child_reduced_50_price_id",
   "events.cancellation_deadline",
   "registrations.is_waitlist",
   "registrations.paid_at",

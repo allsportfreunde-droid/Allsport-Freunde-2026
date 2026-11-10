@@ -20,8 +20,16 @@ export function getStripe(): Stripe | null {
  * Server und nicht im Browser – dort ist der Schlüssel zu Recht unbekannt.
  */
 export function stripePaymentUrl(paymentIntentId: string | null): string | null {
-  if (!paymentIntentId) return null;
+  return paymentIntentId ? dashboardUrl(`payments/${paymentIntentId}`) : null;
+}
+
+/** Link zum Produkt eines Events im Stripe-Dashboard – Modus wie oben. */
+export function stripeProductUrl(productId: string | null | undefined): string | null {
+  return productId ? dashboardUrl(`products/${productId}`) : null;
+}
+
+function dashboardUrl(path: string): string {
   const key = process.env.STRIPE_SECRET_KEY ?? "";
   const prefix = key.startsWith("sk_live") ? "" : "test/";
-  return `https://dashboard.stripe.com/${prefix}payments/${paymentIntentId}`;
+  return `https://dashboard.stripe.com/${prefix}${path}`;
 }

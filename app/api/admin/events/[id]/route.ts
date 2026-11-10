@@ -2,9 +2,10 @@ import { getEventFull, updateEvent, deleteEvent } from "@/lib/db";
 import { invalidateCache } from "@/lib/cache";
 import { NextRequest, NextResponse } from "next/server";
 import type { EventCreateInput } from "@/lib/types";
-import { normalizePrice, normalizeStripePriceId } from "@/lib/price";
+import { normalizeManualChildPrice, normalizePrice } from "@/lib/price";
 import { validateCancellationDeadline } from "@/lib/cancellation";
-import { resolveChildPrice } from "@/lib/child-price";
+import { archiveEventStripeProduct, syncStoredEventCatalog } from "@/lib/stripe-catalog";
+import { stripeProductUrl } from "@/lib/stripe";
 
 export async function GET(
   _request: NextRequest,
@@ -16,7 +17,7 @@ export async function GET(
     if (!event) {
       return NextResponse.json({ error: "Event nicht gefunden." }, { status: 404 });
     }
-    return NextResponse.json(event);
+    return NextResponse.json({ ...event, stripe_product_url: stripeProductUrl(event.stripe_product_id) });
   } catch (error) {
     console.error("Fehler beim Laden des Events:", error);
     return NextResponse.json({ error: "Event konnte nicht geladen werden." }, { status: 500 });
@@ -51,13 +52,12 @@ export async function PUT(
     let childPrice = {
       child_entry_price: existing.child_entry_price ?? null,
       child_price: existing.child_price ?? null,
-      stripe_child_price_id: existing.stripe_child_price_id ?? null,
     };
-    if (body.stripe_child_price_id !== undefined || body.child_entry_price !== undefined || body.child_price !== undefined) {
+    if (body.child_entry_price !== undefined || body.child_price !== undefined) {
       try {
-        childPrice = await resolveChildPrice(body);
+        childPrice = normalizeManualChildPrice(body);
       } catch (error) {
-        return NextResponse.json({ error: error instanceof Error ? error.message : "Kinderpreis konnte nicht geladen werden." }, { status: 400 });
+        return NextResponse.json({ error: error instanceof Error ? error.message : "Ungültiger Kinderpreis." }, { status: 400 });
       }
     }
     await updateEvent(eventId, {
@@ -70,7 +70,6 @@ export async function PUT(
       parking_location: body.parking_location?.trim() || undefined,
       price: price.price,
       entry_price: price.entry_price,
-      stripe_price_id: normalizeStripePriceId(body.stripe_price_id, price.entry_price),
       ...childPrice,
       dress_code: (body.dress_code || "").trim(),
       max_participants: body.max_participants,
@@ -81,7 +80,9 @@ export async function PUT(
 
     // Geändertes Event kann die öffentliche Liste betreffen → Cache invalidieren
     invalidateCache("events:");
-    return NextResponse.json({ message: "Event aktualisiert!" });
+    // Titel, Datum oder Preise können sich geändert haben – Stripe nachziehen.
+    const stripe = await syncStoredEventCatalog(eventId);
+    return NextResponse.json({ message: "Event aktualisiert!", stripe });
   } catch (error) {
     console.error("Fehler beim Aktualisieren:", error);
     return NextResponse.json({ error: "Event konnte nicht aktualisiert werden." }, { status: 500 });
@@ -103,6 +104,7 @@ export async function DELETE(
     await deleteEvent(eventId);
     // Gelöschtes Event aus öffentlicher Liste entfernen → Cache invalidieren
     invalidateCache("events:");
+    await archiveEventStripeProduct(existing.stripe_product_id);
     return NextResponse.json({ message: "Event gelöscht!" });
   } catch (error) {
     console.error("Fehler beim Löschen:", error);

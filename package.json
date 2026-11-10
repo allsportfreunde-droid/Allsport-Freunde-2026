@@ -17,6 +17,7 @@
     "db:migrate-finance": "npx tsx scripts/migrate-finance.ts",
     "db:migrate-stripe": "npx tsx scripts/migrate-stripe.ts",
     "db:migrate-child-price": "npx tsx scripts/migrate-child-price.ts",
+    "db:migrate-stripe-catalog": "npx tsx scripts/migrate-stripe-catalog.ts",
     "db:migrate-person-prices": "npx tsx scripts/migrate-person-prices.ts",
     "db:migrate-checkout-fulfillment": "npx tsx scripts/migrate-checkout-fulfillment.ts",
     "db:migrate-waitlist": "npx tsx scripts/migrate-waitlist.ts",

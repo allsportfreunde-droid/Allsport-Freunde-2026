@@ -45,6 +45,12 @@ async function setup() {
   await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS child_entry_price NUMERIC(10, 2) CHECK (child_entry_price >= 0)`;
   await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS stripe_child_price_id VARCHAR(255)`;
   await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS child_price VARCHAR(100)`;
+  // Stripe-Produkt je Event und die ermäßigten Preise (§ 3), siehe lib/stripe-catalog.ts
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS stripe_product_id VARCHAR(255)`;
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS stripe_adult_reduced_30_price_id VARCHAR(255)`;
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS stripe_adult_reduced_50_price_id VARCHAR(255)`;
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS stripe_child_reduced_30_price_id VARCHAR(255)`;
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS stripe_child_reduced_50_price_id VARCHAR(255)`;
   // Migration: eigener Stornozeitpunkt (leer = 24 Stunden vor Beginn)
   await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS cancellation_deadline TIMESTAMP`;
   console.log("  ✓ Tabelle 'events' erstellt");

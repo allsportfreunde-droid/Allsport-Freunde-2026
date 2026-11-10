@@ -8,6 +8,7 @@ import type {
   PublishEventResult,
   EventImage,
   EventImageInput,
+  EventStripeCatalog,
 } from "../types";
 import { toPublicEvent } from "../types";
 
@@ -111,6 +112,7 @@ export async function getEventFull(id: number): Promise<EventWithRegistrations |
   const rows = await sql`
     SELECT
       e.id, e.title, e.category, e.description, TO_CHAR(e.date, 'YYYY-MM-DD') AS date, e.time::text AS time, e.location, e.parking_location, e.price, e.entry_price::float8 AS entry_price, e.stripe_price_id, e.child_entry_price::float8 AS child_entry_price, e.child_price, e.stripe_child_price_id, e.dress_code, e.max_participants, e.max_per_email, e.status, e.cancellation_reason, e.published_at, e.created_at, TO_CHAR(e.cancellation_deadline, 'YYYY-MM-DD"T"HH24:MI') AS cancellation_deadline,
+      e.stripe_product_id, e.stripe_adult_reduced_30_price_id, e.stripe_adult_reduced_50_price_id, e.stripe_child_reduced_30_price_id, e.stripe_child_reduced_50_price_id,
       COUNT(CASE WHEN r.status = 'approved' THEN rp.id ELSE NULL END)::int AS current_participants,
       COUNT(CASE WHEN r.status = 'pending' AND NOT r.is_waitlist THEN rp.id ELSE NULL END)::int AS pending_participants,
       COALESCE((SELECT JSON_AGG(jsonb_build_object('id', i.id, 'event_id', i.event_id, 'url', i.url, 'alt_text', i.alt_text, 'position', i.position) ORDER BY i.position) FROM event_images i WHERE i.event_id = e.id), '[]') AS images
@@ -121,6 +123,55 @@ export async function getEventFull(id: number): Promise<EventWithRegistrations |
     GROUP BY e.id
   `;
   return (rows[0] as EventWithRegistrations) ?? null;
+}
+
+/** Die Felder, aus denen die Stripe-Preise eines Events berechnet werden. */
+export interface EventPriceBasis {
+  price: string;
+  entry_price?: number | null;
+  child_entry_price?: number | null;
+}
+
+/**
+ * Speichert Produkt und Price IDs aus dem Stripe-Abgleich – aber nur, wenn das
+ * Event noch genau die Beträge hat, aus denen abgeglichen wurde. Hat jemand
+ * inzwischen erneut gespeichert, gehören die IDs zu einem alten Betrag und
+ * dürfen nicht stehen bleiben; dann gibt die Funktion false zurück.
+ */
+export async function saveEventStripeCatalog(
+  id: number,
+  catalog: EventStripeCatalog,
+  basis: EventPriceBasis
+): Promise<boolean> {
+  if (!isPostgresConfigured()) {
+    const { saveLocalEventStripeCatalog } = await import("../local-data");
+    return saveLocalEventStripeCatalog(id, catalog, basis);
+  }
+
+  const sql = getSQL();
+  const rows = await sql`
+    UPDATE events SET
+      stripe_product_id = ${catalog.stripe_product_id},
+      stripe_price_id = ${catalog.stripe_price_id},
+      stripe_child_price_id = ${catalog.stripe_child_price_id},
+      stripe_adult_reduced_30_price_id = ${catalog.stripe_adult_reduced_30_price_id},
+      stripe_adult_reduced_50_price_id = ${catalog.stripe_adult_reduced_50_price_id},
+      stripe_child_reduced_30_price_id = ${catalog.stripe_child_reduced_30_price_id},
+      stripe_child_reduced_50_price_id = ${catalog.stripe_child_reduced_50_price_id}
+    WHERE id = ${id}
+      AND ${samePriceBasis(sql, basis)}
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
+/** SQL: Das Event hat noch genau diese Preisgrundlage. */
+function samePriceBasis(sql: ReturnType<typeof getSQL>, basis: EventPriceBasis) {
+  return sql`(
+    price IS NOT DISTINCT FROM ${basis.price}
+    AND entry_price IS NOT DISTINCT FROM ${basis.entry_price ?? null}::numeric
+    AND child_entry_price IS NOT DISTINCT FROM ${basis.child_entry_price ?? null}::numeric
+  )`;
 }
 
 export async function setEventImages(eventId: number, images: EventImageInput[]): Promise<void> {
@@ -159,12 +210,11 @@ export async function createEvent(data: EventCreateInput & { publish?: boolean }
   const status = data.publish ? "published" : "draft";
   const publishedAt = data.publish ? new Date().toISOString() : null;
   const entryPrice = (data.entry_price != null && data.entry_price > 0) ? data.entry_price : null;
-  // Die Price ID gehört zum Betrag – ohne Betrag ist sie bedeutungslos (siehe lib/price.ts).
-  const stripePriceId = entryPrice != null ? (data.stripe_price_id ?? null) : null;
   const maxPerEmail = normalizeMaxPerEmail(data.max_per_email);
+  // Stripe-IDs bleiben leer – sie entstehen erst im Abgleich (saveEventStripeCatalog).
   const rows = await sql`
-    INSERT INTO events (title, category, description, date, time, location, parking_location, price, entry_price, stripe_price_id, child_entry_price, stripe_child_price_id, child_price, dress_code, max_participants, max_per_email, cancellation_deadline, status, published_at)
-    VALUES (${data.title}, ${data.category}, ${data.description}, ${data.date}, ${data.time}, ${data.location}, ${data.parking_location ?? null}, ${data.price}, ${entryPrice}, ${stripePriceId}, ${data.child_entry_price ?? null}, ${data.stripe_child_price_id ?? null}, ${data.child_price ?? null}, ${data.dress_code}, ${data.max_participants}, ${maxPerEmail}, ${data.cancellation_deadline || null}, ${status}, ${publishedAt})
+    INSERT INTO events (title, category, description, date, time, location, parking_location, price, entry_price, child_entry_price, child_price, dress_code, max_participants, max_per_email, cancellation_deadline, status, published_at)
+    VALUES (${data.title}, ${data.category}, ${data.description}, ${data.date}, ${data.time}, ${data.location}, ${data.parking_location ?? null}, ${data.price}, ${entryPrice}, ${data.child_entry_price ?? null}, ${data.child_price ?? null}, ${data.dress_code}, ${data.max_participants}, ${maxPerEmail}, ${data.cancellation_deadline || null}, ${status}, ${publishedAt})
     RETURNING id
   `;
   const { id } = rows[0] as { id: number };
@@ -213,9 +263,21 @@ export async function updateEvent(id: number, data: EventCreateInput): Promise<v
 
   const sql = getSQL();
   const entryPrice = (data.entry_price != null && data.entry_price > 0) ? data.entry_price : null;
-  // Die Price ID gehört zum Betrag – ohne Betrag ist sie bedeutungslos (siehe lib/price.ts).
-  const stripePriceId = entryPrice != null ? (data.stripe_price_id ?? null) : null;
   const maxPerEmail = normalizeMaxPerEmail(data.max_per_email);
+  const basis = { price: data.price, entry_price: entryPrice, child_entry_price: data.child_entry_price ?? null };
+  // Ändert sich die Preisgrundlage, zeigen die gespeicherten Price IDs auf
+  // alte Beträge. Sie fallen weg, bis der Stripe-Abgleich neue einträgt –
+  // bis dahin rechnet der Checkout mit dem Betrag selbst ab. Das Produkt bleibt.
+  await sql`
+    UPDATE events SET
+      stripe_price_id = NULL,
+      stripe_child_price_id = NULL,
+      stripe_adult_reduced_30_price_id = NULL,
+      stripe_adult_reduced_50_price_id = NULL,
+      stripe_child_reduced_30_price_id = NULL,
+      stripe_child_reduced_50_price_id = NULL
+    WHERE id = ${id} AND NOT ${samePriceBasis(sql, basis)}
+  `;
   await sql`
     UPDATE events SET
       title = ${data.title},
@@ -227,9 +289,7 @@ export async function updateEvent(id: number, data: EventCreateInput): Promise<v
       parking_location = ${data.parking_location ?? null},
       price = ${data.price},
       entry_price = ${entryPrice},
-      stripe_price_id = ${stripePriceId},
       child_entry_price = ${data.child_entry_price ?? null},
-      stripe_child_price_id = ${data.stripe_child_price_id ?? null},
       child_price = ${data.child_price ?? null},
       dress_code = ${data.dress_code},
       max_participants = ${data.max_participants},

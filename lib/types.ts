@@ -1,6 +1,22 @@
 export type EventStatus = "draft" | "published" | "cancelled";
 
-export interface Event {
+/**
+ * Das Stripe-Produkt eines Events und seine sechs Preise (siehe lib/price-tiers.ts).
+ * Entsteht ausschließlich serverseitig beim Speichern (lib/stripe-catalog.ts) –
+ * nie aus Eingaben des Browsers. Eine Price ID ist leer, solange sie nicht zum
+ * aktuell gespeicherten Betrag passt.
+ */
+export interface EventStripeCatalog {
+  stripe_product_id: string | null;
+  stripe_price_id: string | null;
+  stripe_child_price_id: string | null;
+  stripe_adult_reduced_30_price_id: string | null;
+  stripe_adult_reduced_50_price_id: string | null;
+  stripe_child_reduced_30_price_id: string | null;
+  stripe_child_reduced_50_price_id: string | null;
+}
+
+export interface Event extends Partial<EventStripeCatalog> {
   id: number;
   title: string;
   category: "fussball" | "fitness" | "schwimmen";
@@ -12,14 +28,12 @@ export interface Event {
   price: string;
   /** Numeric entry price per person in Euro (null = free / not set) */
   entry_price?: number | null;
-  /** Stripe Price ID the amount came from (null = manually maintained) */
-  stripe_price_id?: string | null;
   /** Kinderbetrag in Euro: null = Erwachsenenpreis, 0 = kostenlos. */
   child_entry_price?: number | null;
   /** Optionaler Anzeigetext; der feste Kinderbetrag gilt weiterhin. */
   child_price?: string | null;
-  /** Stripe Price ID für Kinder, auch für einen Preis von 0 Euro. */
-  stripe_child_price_id?: string | null;
+  /** Link zum Produkt im Stripe-Dashboard – nur Admin-API, serverseitig gebaut. */
+  stripe_product_url?: string | null;
   dress_code: string;
   max_participants: number;
   /** Max persons per email address (default 5) */
@@ -443,13 +457,9 @@ export interface EventCreateInput {
   parking_location?: string;
   price: string;
   entry_price?: number | null;
-  /** Stripe Price ID the amount came from (null = manually maintained) */
-  stripe_price_id?: string | null;
   /** Kinderbetrag in Euro: null = Erwachsenenpreis, 0 = kostenlos. */
   child_entry_price?: number | null;
   child_price?: string | null;
-  /** Stripe Price ID für Kinder, auch für einen Preis von 0 Euro. */
-  stripe_child_price_id?: string | null;
   dress_code: string;
   max_participants: number;
   /** Max persons per email address (default 5) */
