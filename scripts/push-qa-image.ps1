@@ -1,6 +1,7 @@
 param(
   [string]$RegistryName = $env:AZURE_CONTAINER_REGISTRY,
-  [string]$Repository = $env:AZURE_CONTAINER_IMAGE
+  [string]$Repository = $env:AZURE_CONTAINER_IMAGE,
+  [string]$EnvFile = ".env"
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,8 +35,36 @@ function Invoke-NativeCommand {
   }
 }
 
+# Next.js inlines NEXT_PUBLIC_* at build time (also in the middleware), so they
+# must be passed as build args. Process env wins over the env file.
+function Get-BuildValue {
+  param([Parameter(Mandatory = $true)][string]$Name)
+
+  $Value = [Environment]::GetEnvironmentVariable($Name)
+  if ([string]::IsNullOrWhiteSpace($Value) -and (Test-Path $EnvFile)) {
+    $Line = Get-Content $EnvFile | Where-Object { $_ -match "^\s*$Name\s*=" } | Select-Object -Last 1
+    if ($Line) {
+      $Value = ($Line -replace "^\s*$Name\s*=\s*", "").Trim().Trim('"').Trim("'")
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    throw "$Name fehlt (weder als Umgebungsvariable noch in $EnvFile gesetzt)."
+  }
+  return $Value
+}
+
+$SupabaseUrl = Get-BuildValue "NEXT_PUBLIC_SUPABASE_URL"
+$SupabaseAnonKey = Get-BuildValue "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+Write-Host "Supabase-URL fuer den Build: $SupabaseUrl"
+
 Invoke-NativeCommand "az" @("acr", "login", "--name", $RegistryName)
-Invoke-NativeCommand "docker" @("build", "--tag", $Image, ".")
+Invoke-NativeCommand "docker" @(
+  "build",
+  "--build-arg", "NEXT_PUBLIC_SUPABASE_URL=$SupabaseUrl",
+  "--build-arg", "NEXT_PUBLIC_SUPABASE_ANON_KEY=$SupabaseAnonKey",
+  "--tag", $Image,
+  "."
+)
 Invoke-NativeCommand "docker" @("push", $Image)
 
-Write-Host "`n✓ $Image wurde gebaut und gepusht."
+Write-Host "`nOK: $Image wurde gebaut und gepusht."
