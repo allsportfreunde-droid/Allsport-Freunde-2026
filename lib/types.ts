@@ -28,8 +28,6 @@ export interface Event {
   cancellation_reason: string | null;
   published_at: string | null;
   created_at: string;
-  /** Optional URL for post-event feedback survey */
-  survey_url?: string | null;
   /** Eigener Stornozeitpunkt "YYYY-MM-DDTHH:MM" (null = 24 Stunden vor Beginn) */
   cancellation_deadline?: string | null;
 }
@@ -456,8 +454,6 @@ export interface EventCreateInput {
   max_participants: number;
   /** Max persons per email address (default 5) */
   max_per_email?: number;
-  /** Optional URL for post-event feedback survey */
-  survey_url?: string | null;
   /** Eigener Stornozeitpunkt "YYYY-MM-DDTHH:MM" (null = 24 Stunden vor Beginn) */
   cancellation_deadline?: string | null;
   images?: EventImageInput[];

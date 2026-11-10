@@ -62,7 +62,6 @@ export async function POST(request: NextRequest) {
       dress_code: (body.dress_code || "").trim(),
       max_participants: body.max_participants,
       max_per_email: body.max_per_email,
-      survey_url: body.survey_url?.trim() || null,
       cancellation_deadline: body.cancellation_deadline?.trim() || null,
       images: Array.isArray(body.images) ? body.images : [],
       publish: bodyAny.publish === true,
