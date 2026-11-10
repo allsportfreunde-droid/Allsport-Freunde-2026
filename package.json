@@ -26,6 +26,7 @@
     "db:migrate-registration-history": "npx tsx scripts/migrate-registration-history.ts",
     "db:migrate-release": "tsx scripts/migrate-release.ts",
     "db:migrate-donations": "npx tsx scripts/migrate-donations.ts",
+    "db:migrate-reviews": "npx tsx scripts/migrate-reviews.ts",
     "db:migrate-template-finance": "npx tsx scripts/migrate-template-finance.ts",
     "db:migrate-reminder": "npx tsx scripts/migrate-reminder.ts",
     "db:migrate-persons": "npx tsx scripts/migrate-persons.ts",

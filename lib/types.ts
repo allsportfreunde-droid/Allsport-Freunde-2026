@@ -657,3 +657,98 @@ export interface HelperInput {
   notes?: string | null;
   is_active?: boolean;
 }
+
+// ─── Event-Bewertungen ────────────────────────────────────
+
+export type ReviewWouldReturn = "ja" | "vielleicht" | "nein";
+export type ReviewSendKind = "initial" | "reminder";
+
+export interface EventReview {
+  id: number;
+  event_id: number;
+  registration_id: number;
+  rating: number;                        // 1–5
+  would_return: ReviewWouldReturn | null;
+  comment: string | null;
+  publish_consent: boolean;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Bewertung mit Namen des Verfassers – nur für Admins */
+export interface EventReviewWithAuthor extends EventReview {
+  first_name: string;
+  last_name: string;
+  email: string | null;
+  event_title?: string;                  // in Übersichten über mehrere Events
+}
+
+export interface ReviewStats {
+  responses: number;
+  average: number | null;                // eine Nachkommastelle, null ohne Antworten
+  distribution: Record<1 | 2 | 3 | 4 | 5, number>;
+  would_return: Record<ReviewWouldReturn, number>;
+}
+
+export interface EventReviewDashboard {
+  event: { id: number; title: string; date: string; status: string };
+  can_send: boolean;
+  /** "event_in_future" | "event_cancelled" | null */
+  send_blocked_reason: string | null;
+  checked_in_registrations: number;      // genehmigt, mindestens eine Person eingecheckt
+  without_email: number;                 // davon ohne E-Mail
+  requested: number;                     // review_requested_at gesetzt
+  pending_initial: number;               // eingecheckt, mit E-Mail, noch nicht angefragt
+  first_requested_at: string | null;
+  reminder_sent_at: string | null;       // events.review_reminder_sent_at
+  reminder_candidates: number;           // angefragt, keine Antwort, Fenster offen
+  stats: ReviewStats;
+  reviews: EventReviewWithAuthor[];      // neueste zuerst
+}
+
+export interface ReviewSendResult { kind: ReviewSendKind; sent: number; failed: number }
+
+/** Für die öffentliche Teilnehmerseite – keine internen IDs */
+export interface ReviewTokenInfo {
+  first_name: string;
+  event_title: string;
+  event_date: string;                    // YYYY-MM-DD
+  deadline: string;                      // ISO, review_requested_at + 14 Tage
+  is_open: boolean;
+  review: Pick<EventReview, "rating" | "would_return" | "comment" | "publish_consent"> | null;
+}
+
+export interface PublicTestimonial {
+  id: number;
+  name: string;                          // "Ahmet K."
+  rating: number;
+  comment: string;
+  event_title: string;
+  event_category: string;
+  event_date: string;
+}
+
+export interface PublicTestimonialsResponse {
+  average: number | null;                // über alle Bewertungen, null bei < 5 Bewertungen
+  count: number;
+  items: PublicTestimonial[];
+}
+
+export interface ReviewOverviewEvent {
+  event_id: number;
+  title: string;
+  date: string;
+  category: string;
+  requested: number;
+  responses: number;
+  response_rate: number | null;          // 0–1
+  average: number | null;
+  would_return_yes_rate: number | null;  // Anteil „ja“ unter den beantworteten Angaben
+}
+
+export interface ReviewOverviewResponse {
+  events: ReviewOverviewEvent[];         // neuestes Event zuerst, nur Events mit requested > 0
+  pending_approval: EventReviewWithAuthor[]; // Einwilligung + Kommentar, nicht veröffentlicht
+  published: EventReviewWithAuthor[];
+}
