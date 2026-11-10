@@ -114,6 +114,20 @@ Funktionen:
 - Komplett auf Deutsch
 - Admin-Bereich mit Magic-Link-Login, Dashboard, Event- und Anmeldungsverwaltung
 
+## Event-Reviews
+
+Im Check-in-Dashboard wird die Review-Anfrage ab dem Event-Tag im Tab „Review“ manuell an eingecheckte Anmeldungen mit E-Mail versendet; später Eingecheckte können per „Nachsenden“ erreicht werden.
+Teilnehmer bewerten über den Link in der E-Mail und können ihre Antworten innerhalb von 14 Tagen ändern.
+Unter Admin → Reviews gibt der Vorstand Kommentare mit Einwilligung für die Homepage frei und kann die Freigabe jederzeit zurücknehmen.
+
+Migration vor dem Deployment auf der jeweiligen Datenbank ausführen:
+
+```bash
+npm run db:migrate-reviews
+```
+
+Reviews benötigen eine Postgres-Datenbank (`POSTGRES_URL`). Für den E-Mail-Versand müssen `RESEND_API_KEY` und `NEXT_PUBLIC_APP_URL` gesetzt sein: Ohne API-Schlüssel werden E-Mails nur protokolliert und als versendet gezählt; ohne `NEXT_PUBLIC_APP_URL` zeigen die Links in den E-Mails auf `http://localhost:3000`.
+
 ## API-Endpunkte
 
 ### Öffentlich
