@@ -40,4 +40,6 @@ export const RATE_LIMITS = {
   // Jeder Aufruf erzeugt eine Stripe Session – das soll niemand in Schleife tun.
   checkout: { limit: 10, windowMs: 10 * 60 * 1000 },
   checkoutStatus: { limit: 120, windowMs: 60 * 1000 },
+  // Öffentliche Review-Links: Laden und Speichern teilen sich dieses Limit.
+  review: { limit: 60, windowMs: 10 * 60 * 1000 },
 } as const;
