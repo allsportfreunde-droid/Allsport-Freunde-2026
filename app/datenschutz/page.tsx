@@ -353,6 +353,24 @@ export default function DatenschutzPage() {
                   Tage.
                 </p>
               </div>
+              {/* TODO Vorstand: Text zu Event-Bewertungen inhaltlich prüfen */}
+              <div className="border-l-4 border-green-500 pl-4">
+                <h3 className="font-semibold text-gray-900 mb-1">
+                  2.6 Event-Bewertungen
+                </h3>
+                <p>
+                  Nach Ihrer Teilnahme an einer Veranstaltung (Check-in) kann
+                  der Verein Ihnen per E-Mail eine Bewertungsanfrage senden.
+                  Gespeichert werden die Sternebewertung, die Antwort zur
+                  erneuten Teilnahme, der Kommentar, die Einwilligung zur
+                  Veröffentlichung sowie Zeitstempel. Diese Angaben sind mit
+                  Ihrer Anmeldung verknüpft und für den Vorstand zusammen mit
+                  Ihrem Namen einsehbar.
+                </p>
+                <p className="mt-1 text-gray-500">
+                  Zweck: Verbesserung unserer Veranstaltungen.
+                </p>
+              </div>
             </div>
           </Section>
 
@@ -394,6 +412,21 @@ export default function DatenschutzPage() {
                   </span>
                 </li>
               </ul>
+              {/* TODO Vorstand: Text zu Event-Bewertungen inhaltlich prüfen */}
+              <p>
+                Die Bewertungsanfrage und die Auswertung von Event-Bewertungen
+                erfolgen auf Grundlage unseres berechtigten Interesses an der
+                Verbesserung unserer Veranstaltungen (Art. 6 Abs. 1 lit. f DSGVO).
+              </p>
+              <p>
+                Die Veröffentlichung eines Kommentars auf der Website mit
+                Vorname und Anfangsbuchstaben des Nachnamens erfolgt nur mit
+                Ihrer Einwilligung (Art. 6 Abs. 1 lit. a DSGVO) und nach Freigabe
+                durch den Vorstand. Sie können diese Einwilligung jederzeit
+                mit Wirkung für die Zukunft widerrufen: innerhalb der
+                Bewertungsfrist über den Bewertungslink oder jederzeit durch
+                Kontaktaufnahme mit dem Verein.
+              </p>
             </div>
           </Section>
 
@@ -417,6 +450,7 @@ export default function DatenschutzPage() {
 
           {/* 5. Speicherdauer */}
           <Section id="speicherdauer" title="5. Speicherdauer">
+            {/* TODO Vorstand: Text zu Event-Bewertungen inhaltlich prüfen */}
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
                 <thead>
@@ -434,6 +468,10 @@ export default function DatenschutzPage() {
                     [
                       "Veranstaltungsregistrierungen",
                       "Bis zur Löschung durch den Administrator, spätestens nach Ablauf der steuerrechtlichen Aufbewahrungsfrist (i.d.R. 10 Jahre)",
+                    ],
+                    [
+                      "Event-Bewertungen",
+                      "Wie die zugehörige Veranstaltungsregistrierung; die Bewertung wird gemeinsam mit dieser gelöscht.",
                     ],
                     [
                       "Kontaktanfragen (ohne Einwilligung)",
