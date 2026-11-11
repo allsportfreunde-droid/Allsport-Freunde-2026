@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { neon } from "@neondatabase/serverless";
-import { generateCheckinToken, generateQRCode } from "../lib/checkin";
+import { generateCheckinToken, generateQRCode } from "../../lib/checkin";
 
 const dbUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
 if (!dbUrl) {
