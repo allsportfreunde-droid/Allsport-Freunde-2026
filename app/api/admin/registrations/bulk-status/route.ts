@@ -2,7 +2,9 @@ import {
   bulkUpdateRegistrationStatus,
   getRegistrationWithEvent,
   getEvent,
+  isEventFull,
 } from "@/lib/db";
+import { onCapacityChanged } from "@/lib/waitlist";
 import {
   sendRegistrationApprovedEmail,
   sendRegistrationRejectedEmail,
@@ -39,7 +41,14 @@ export async function PATCH(request: NextRequest) {
       ids.map((id) => getRegistrationWithEvent(id))
     );
 
+    // Bestätigen kann Events füllen, Ablehnen/Zurücksetzen Plätze freimachen.
+    const eventIds = [...new Set(regsBefore.flatMap((reg) => (reg ? [reg.event_id] : [])))];
+    const wasFull = new Map(await Promise.all(
+      eventIds.map(async (eventId) => [eventId, await isEventFull(eventId)] as const)
+    ));
+
     const results = await bulkUpdateRegistrationStatus(ids, status, note);
+    for (const [eventId, full] of wasFull) await onCapacityChanged(eventId, full);
 
     // Fire-and-forget emails
     for (const reg of regsBefore) {

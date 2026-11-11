@@ -46,11 +46,10 @@ export function RegistrationReceivedEmail({
           </Text>
           <Text style={text}>
             vielen Dank für deine Anmeldung zu <strong>{eventTitle}</strong>!
-            Dein Platz ist reserviert.
           </Text>
           <Text style={text}>
             {priceLabel
-              ? "Damit deine Anmeldung verbindlich wird, fehlt nur noch der Teilnahmebetrag."
+              ? "Verbindlich wird dein Platz mit der Zahlung – die freien Plätze gehen in der Reihenfolge der Zahlungen weg. Bezahle deshalb am besten gleich."
               : "Deine Anmeldung ist bei uns eingegangen und wird nun geprüft."}
           </Text>
           {priceLabel && (

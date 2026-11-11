@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createWalkInRegistration, getEvent, getCheckoutInfo } from "@/lib/db";
 import { sendWaitlistSpotOfferedEmail } from "@/lib/email";
+import { onCapacityChanged } from "@/lib/waitlist";
 import { formatPriceLabel } from "@/lib/price";
 
 export async function POST(request: NextRequest) {
@@ -66,6 +67,8 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
+    // Walk-ins sind sofort bestätigt und können das Event füllen.
+    await onCapacityChanged(event_id, false);
 
     // Der Walk-in ist bereits bestaetigt und eingecheckt – zu tun bleibt die
     // Zahlung. Verschickt wird dieselbe Mail wie beim Nachruecken von der

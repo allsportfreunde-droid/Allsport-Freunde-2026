@@ -18,9 +18,16 @@ interface Props {
   eventLocation: string;
   statusUrl: string;
   persons?: Array<{ firstName: string; lastName: string }>;
+  /** z. B. "2 Erwachsene × 8,00 € = 16,00 €" */
+  priceLabel: string;
 }
 
-export function WaitlistMovedEmail({
+/**
+ * Durch eine Stornierung ist wieder ein Platz frei. Diese Mail geht an alle
+ * offenen, unbezahlten Anmeldungen gleichzeitig – verbindlich wird der Platz
+ * für die Person, die zuerst bezahlt. Sie verspricht deshalb nichts.
+ */
+export function WaitlistSpotFreedEmail({
   firstName,
   eventTitle,
   eventDate,
@@ -28,25 +35,26 @@ export function WaitlistMovedEmail({
   eventLocation,
   statusUrl,
   persons,
+  priceLabel,
 }: Props) {
   return (
     <Html lang="de">
       <Head />
       <Body style={main}>
         <Container style={container}>
-          <Text style={heading}>Du stehst jetzt auf der Warteliste</Text>
+          <Text style={heading}>Ein Platz ist frei geworden!</Text>
+          <Text style={text}>Assalamu Alaikum {firstName},</Text>
           <Text style={text}>
-            Assalamu Alaikum {firstName},
+            für <strong>{eventTitle}</strong> ist gerade wieder ein Platz frei
+            geworden. Diese Nachricht geht an alle auf der Warteliste – den
+            Platz bekommt, wer zuerst bezahlt.
           </Text>
-          <Text style={text}>
-            für deine Anmeldung zu <strong>{eventTitle}</strong> ist bisher
-            keine Zahlung bei uns eingegangen. Damit andere den Platz nutzen
-            können, haben wir dich auf die <strong>Warteliste</strong> gesetzt.
-          </Text>
-          <Section style={waitlistBox}>
-            <Text style={waitlistText}>
-              Wir melden uns per E-Mail, sobald wieder ein Platz frei ist. Bis
-              dahin ist keine Zahlung möglich – du musst nichts weiter tun.
+          <Section style={offerBox}>
+            <Text style={offerText}>
+              Sichere dir den Platz, indem du jetzt den Teilnahmebetrag von{" "}
+              <strong>{priceLabel}</strong> bezahlst. Ist er schon vergeben,
+              bleibst du auf der Warteliste und wir melden uns beim nächsten
+              freien Platz.
             </Text>
           </Section>
           <Section style={infoBox}>
@@ -63,7 +71,7 @@ export function WaitlistMovedEmail({
           {persons && persons.length > 0 && (
             <Section style={personsBox}>
               <Text style={personsHeading}>
-                Personen auf der Warteliste ({persons.length}):
+                Angemeldete Personen ({persons.length}):
               </Text>
               {persons.map((p, i) => (
                 <Text key={i} style={personItem}>
@@ -72,23 +80,13 @@ export function WaitlistMovedEmail({
               ))}
             </Section>
           )}
-          <Text style={text}>
-            Du kannst den Status deiner Anmeldung jederzeit hier einsehen:
-          </Text>
           <Link href={statusUrl} style={button}>
-            Status prüfen
+            Jetzt bezahlen
           </Link>
-          <Section style={cancelBox}>
-            <Text style={cancelHeading}>Doch kein Interesse mehr?</Text>
-            <Text style={cancelText}>
-              Wenn du nicht mehr auf der Warteliste stehen möchtest, kannst du
-              deine Anmeldung jederzeit hier zurückziehen. So rücken andere
-              schneller nach.
-            </Text>
-            <Link href={statusUrl} style={cancelButton}>
-              Von der Warteliste entfernen
-            </Link>
-          </Section>
+          <Text style={hint}>
+            Kannst du doch nicht teilnehmen? Dann storniere deine Anmeldung bitte
+            über denselben Link.
+          </Text>
           <Hr style={hr} />
           <Text style={footer}>
             Allsport Freunde 2026 e.V. – Gemeinsam sportlich in der Rhein-Main-Region
@@ -99,7 +97,7 @@ export function WaitlistMovedEmail({
   );
 }
 
-export default WaitlistMovedEmail;
+export default WaitlistSpotFreedEmail;
 
 const main: React.CSSProperties = {
   backgroundColor: "#f6f9fc",
@@ -127,18 +125,18 @@ const text: React.CSSProperties = {
   color: "#333333",
 };
 
-const waitlistBox: React.CSSProperties = {
-  backgroundColor: "#fffbeb",
+const offerBox: React.CSSProperties = {
+  backgroundColor: "#f0fdf4",
   borderRadius: "8px",
   padding: "16px 20px",
   margin: "16px 0",
-  borderLeft: "4px solid #f59e0b",
+  borderLeft: "4px solid #16a34a",
 };
 
-const waitlistText: React.CSSProperties = {
+const offerText: React.CSSProperties = {
   fontSize: "14px",
   lineHeight: "22px",
-  color: "#92400e",
+  color: "#166534",
   margin: "0",
 };
 
@@ -154,64 +152,6 @@ const infoText: React.CSSProperties = {
   lineHeight: "22px",
   color: "#333333",
   margin: "4px 0",
-};
-
-const button: React.CSSProperties = {
-  backgroundColor: "#2563eb",
-  borderRadius: "6px",
-  color: "#ffffff",
-  display: "inline-block",
-  fontSize: "16px",
-  fontWeight: "bold",
-  padding: "12px 24px",
-  textDecoration: "none",
-  textAlign: "center" as const,
-  margin: "16px 0",
-};
-
-const cancelBox: React.CSSProperties = {
-  backgroundColor: "#fff7ed",
-  borderRadius: "8px",
-  padding: "16px 20px",
-  margin: "24px 0 8px",
-  borderLeft: "4px solid #f97316",
-};
-
-const cancelHeading: React.CSSProperties = {
-  fontSize: "14px",
-  fontWeight: "bold",
-  color: "#9a3412",
-  margin: "0 0 6px 0",
-};
-
-const cancelText: React.CSSProperties = {
-  fontSize: "13px",
-  lineHeight: "20px",
-  color: "#7c3a1e",
-  margin: "0 0 12px 0",
-};
-
-const cancelButton: React.CSSProperties = {
-  backgroundColor: "#dc2626",
-  borderRadius: "6px",
-  color: "#ffffff",
-  display: "inline-block",
-  fontSize: "14px",
-  fontWeight: "bold",
-  padding: "10px 20px",
-  textDecoration: "none",
-  textAlign: "center" as const,
-};
-
-const hr: React.CSSProperties = {
-  borderColor: "#e6ebf1",
-  margin: "32px 0 16px",
-};
-
-const footer: React.CSSProperties = {
-  fontSize: "12px",
-  color: "#8898aa",
-  lineHeight: "20px",
 };
 
 const personsBox: React.CSSProperties = {
@@ -233,4 +173,34 @@ const personItem: React.CSSProperties = {
   lineHeight: "22px",
   color: "#333333",
   margin: "2px 0",
+};
+
+const button: React.CSSProperties = {
+  backgroundColor: "#16a34a",
+  borderRadius: "6px",
+  color: "#ffffff",
+  display: "inline-block",
+  fontSize: "16px",
+  fontWeight: "bold",
+  padding: "12px 24px",
+  textDecoration: "none",
+  textAlign: "center" as const,
+  margin: "16px 0",
+};
+
+const hint: React.CSSProperties = {
+  fontSize: "13px",
+  lineHeight: "20px",
+  color: "#6b7280",
+};
+
+const hr: React.CSSProperties = {
+  borderColor: "#e6ebf1",
+  margin: "32px 0 16px",
+};
+
+const footer: React.CSSProperties = {
+  fontSize: "12px",
+  color: "#8898aa",
+  lineHeight: "20px",
 };

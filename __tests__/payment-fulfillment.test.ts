@@ -5,14 +5,16 @@ const mocks = vi.hoisted(() => ({
   retrieve: vi.fn(), getPricing: vi.fn(), markPaid: vi.fn(), getRegistration: vi.fn(),
   getEvent: vi.fn(), sendMail: vi.fn(), generateQR: vi.fn(),
   recordState: vi.fn(), approve: vi.fn(), failure: vi.fn(), deliver: vi.fn(), refund: vi.fn(),
+  eventId: vi.fn(), capacityChanged: vi.fn(),
 }));
 vi.mock("@/lib/stripe", () => ({ getStripe: () => ({ checkout: { sessions: { retrieve: mocks.retrieve } } }) }));
 vi.mock("@/lib/db", () => ({
   getCheckoutPricing: mocks.getPricing, markRegistrationPaid: mocks.markPaid,
   getRegistrationWithEvent: mocks.getRegistration, getEvent: mocks.getEvent,
   recordCheckoutState: mocks.recordState, approveCheckoutRegistration: mocks.approve,
-  queueCheckoutFailure: mocks.failure,
+  queueCheckoutFailure: mocks.failure, getRegistrationEventId: mocks.eventId,
 }));
+vi.mock("@/lib/waitlist", () => ({ onCapacityChanged: mocks.capacityChanged }));
 vi.mock("@/lib/checkout-notifications", () => ({ deliverCheckoutNotifications: mocks.deliver }));
 vi.mock("@/lib/cancellation-refund", () => ({ reconcileCheckoutRefund: mocks.refund }));
 vi.mock("@/lib/email", () => ({ sendRegistrationApprovedEmail: mocks.sendMail }));
@@ -34,6 +36,7 @@ beforeEach(() => {
   mocks.getEvent.mockResolvedValue({ title: "Sport", entry_price: 99, child_entry_price: 88 });
   mocks.generateQR.mockResolvedValue("qr");
   mocks.recordState.mockImplementation(async (_session, _registration, state) => state);
+  mocks.eventId.mockResolvedValue(5);
 });
 
 describe("Zahlung mit unveränderlicher Personenaufteilung", () => {
@@ -43,6 +46,18 @@ describe("Zahlung mit unveränderlicher Personenaufteilung", () => {
     expect(mocks.markPaid).toHaveBeenCalledWith(1, "cs_1", 14, "pi_1", prices);
     expect(mocks.approve).toHaveBeenCalledWith(1, "cs_1");
     expect(mocks.deliver).toHaveBeenCalledWith(1);
+  });
+
+  it("gleicht nach der Bestätigung die Kapazität ab – volle Events schließen offene Bezahlfenster", async () => {
+    await fulfillCheckout("cs_1");
+    expect(mocks.capacityChanged).toHaveBeenCalledWith(5, false);
+    expect(mocks.approve.mock.invocationCallOrder[0]).toBeLessThan(mocks.capacityChanged.mock.invocationCallOrder[0]);
+
+    vi.clearAllMocks();
+    mocks.retrieve.mockResolvedValue({ ...session, metadata: { pricing_version: "1", event_id: "9" } });
+    await fulfillCheckout("cs_1");
+    expect(mocks.capacityChanged).toHaveBeenCalledWith(9, false);
+    expect(mocks.eventId).not.toHaveBeenCalled();
   });
 
   it("holt ausstehenden Versand auch nach bereits verbuchter Zahlung nach", async () => {

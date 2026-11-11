@@ -60,7 +60,7 @@ export async function approveCheckoutRegistration(registrationId: number, sessio
   await sql`
     WITH approved AS (
       UPDATE registrations SET status = 'approved', status_changed_at = NOW()
-      WHERE id = ${registrationId} AND status = 'pending' AND NOT is_waitlist
+      WHERE id = ${registrationId} AND status = 'pending'
         AND EXISTS (SELECT 1 FROM checkout_pricing cp WHERE cp.session_id = ${sessionId}
           AND cp.registration_id = registrations.id AND cp.payment_state IN ('processing', 'paid'))
       RETURNING id, status_token

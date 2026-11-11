@@ -2,7 +2,7 @@ import { Resend } from "resend";
 import { RegistrationReceivedEmail } from "@/emails/registration-received";
 import { WaitlistReceivedEmail } from "@/emails/waitlist-received";
 import { WaitlistSpotOfferedEmail } from "@/emails/waitlist-spot-offered";
-import { WaitlistMovedEmail } from "@/emails/waitlist-moved";
+import { WaitlistSpotFreedEmail } from "@/emails/waitlist-spot-freed";
 import { RegistrationApprovedEmail } from "@/emails/registration-approved";
 import { RegistrationRejectedEmail } from "@/emails/registration-rejected";
 import { DiscountDecisionEmail } from "@/emails/discount-decision";
@@ -102,7 +102,7 @@ export async function sendRegistrationReceivedEmail(
   );
 }
 
-export async function sendWaitlistReceivedEmail(data: EmailData) {
+export async function sendWaitlistReceivedEmail(data: EmailData & { paid?: boolean }) {
   const statusUrl = `${appUrl}/status/${data.statusToken}`;
   const subject = `Du stehst auf der Warteliste – ${data.eventTitle}`;
 
@@ -117,28 +117,35 @@ export async function sendWaitlistReceivedEmail(data: EmailData) {
       eventLocation: data.eventLocation,
       statusUrl,
       persons: data.persons,
+      paid: data.paid,
     })
   );
 }
 
-/** Das Team hat eine unbezahlte Anmeldung zurück auf die Warteliste gesetzt. */
-export async function sendWaitlistMovedEmail(data: EmailData) {
-  const statusUrl = `${appUrl}/status/${data.statusToken}`;
-  const subject = `Du stehst jetzt auf der Warteliste – ${data.eventTitle}`;
-
-  sendEmail(
-    subject,
-    data.to,
-    WaitlistMovedEmail({
+/**
+ * Durch eine Stornierung ist wieder ein Platz frei. Geht an alle offenen,
+ * unbezahlten Anmeldungen zugleich (siehe lib/waitlist.ts) – den Platz
+ * bekommt, wer zuerst bezahlt. Als Batch-Nachricht gebaut, damit eine lange
+ * Warteliste nicht ins Rate-Limit des Versanddienstes läuft.
+ */
+export async function buildWaitlistSpotFreedEmail(
+  data: EmailData & { priceLabel: string }
+): Promise<EmailBatchMessage> {
+  return {
+    from: fromEmail,
+    to: data.to,
+    subject: `Ein Platz ist frei geworden – ${data.eventTitle}`,
+    html: await render(WaitlistSpotFreedEmail({
       firstName: data.firstName,
       eventTitle: data.eventTitle,
       eventDate: formatDateDE(data.eventDate),
       eventTime: data.eventTime,
       eventLocation: data.eventLocation,
-      statusUrl,
+      statusUrl: `${appUrl}/status/${data.statusToken}`,
       persons: data.persons,
-    })
-  );
+      priceLabel: data.priceLabel,
+    })),
+  };
 }
 
 /**

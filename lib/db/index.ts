@@ -11,3 +11,4 @@ export * from "./discount-requests";
 export * from "./checkout";
 export * from "./checkout-creation";
 export * from "./reviews";
+export * from "./waitlist";

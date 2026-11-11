@@ -3,6 +3,7 @@ import { verifyWalkInToken } from "@/lib/checkin";
 import { createWalkInRegistration, getEvent } from "@/lib/db";
 import { formatPriceLabel } from "@/lib/price";
 import { sendWaitlistSpotOfferedEmail } from "@/lib/email";
+import { onCapacityChanged } from "@/lib/waitlist";
 
 // Rate limiter: 10 self-service registrations per minute per IP
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -151,6 +152,8 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
+    // Walk-ins sind sofort bestätigt und können das Event füllen.
+    await onCapacityChanged(eventId, false);
 
     // Der Platz steht, offen ist die Zahlung. Es geht dieselbe Mail raus wie
     // beim Walk-in über das Check-In-Dashboard: sie nennt den Betrag und führt

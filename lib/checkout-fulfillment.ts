@@ -4,7 +4,9 @@ import {
   recordCheckoutState,
   approveCheckoutRegistration,
   queueCheckoutFailure,
+  getRegistrationEventId,
 } from "@/lib/db";
+import { onCapacityChanged } from "@/lib/waitlist";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { personPricesTotal } from "@/lib/payment-prices";
@@ -64,12 +66,17 @@ export async function fulfillCheckout(sessionId: string, asyncPaymentFailed = fa
   // checkout 'paid', so the gap before paid_at is written cannot reopen it.
   const state = await recordCheckoutState(sessionId, registrationId,
     paid ? "paid" : processing ? "processing" : "failed", paymentIntentId);
+  // Wer bezahlt, ist dabei – auch wenn im selben Moment jemand anderes den
+  // letzten Platz bezahlt hat (akzeptierte, seltene Überbuchung). Ist das
+  // Event danach voll, schließt onCapacityChanged die übrigen Bezahlfenster.
   if (paid) {
     await markRegistrationPaid(registrationId, sessionId, amount, paymentIntentId, personPrices);
     await approveCheckoutRegistration(registrationId, sessionId);
     await reconcileCheckoutRefund(registrationId, sessionId);
+    await closeCheckoutsIfFull(registrationId, session);
   } else if (processing && state === "processing") {
     await approveCheckoutRegistration(registrationId, sessionId);
+    await closeCheckoutsIfFull(registrationId, session);
   } else if (failed && state === "failed") {
     await queueCheckoutFailure(registrationId, sessionId,
       intent?.last_payment_error?.message ?? "Stripe meldet einen fehlgeschlagenen SEPA-Einzug.", amount, paymentIntentId);
@@ -77,6 +84,15 @@ export async function fulfillCheckout(sessionId: string, asyncPaymentFailed = fa
   // Auch nach bereits verbuchter Zahlung ausstehende Versandaufträge nachholen.
   await deliverCheckoutNotifications(registrationId);
   return paid;
+}
+
+/** Eine Bestätigung kann das Event nur füllen, nie leeren – daher wasFull = false. */
+async function closeCheckoutsIfFull(registrationId: number, session: Stripe.Checkout.Session) {
+  const fromMetadata = Number(session.metadata?.event_id);
+  const eventId = Number.isSafeInteger(fromMetadata) && fromMetadata > 0
+    ? fromMetadata
+    : await getRegistrationEventId(registrationId);
+  if (eventId) await onCapacityChanged(eventId, false);
 }
 
 export function isSepaDebit(intent: Stripe.PaymentIntent | null): boolean {

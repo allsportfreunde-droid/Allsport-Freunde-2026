@@ -7,6 +7,7 @@ import {
   getRegistrationWithEvent,
   markCheckedIn,
 } from "@/lib/db";
+import { onCapacityChanged } from "@/lib/waitlist";
 import { sendRegistrationApprovedEmail } from "@/lib/email";
 import { generateAndSaveCheckinQR } from "@/lib/checkin-qr";
 
@@ -65,6 +66,8 @@ export async function POST(request: NextRequest) {
     // Only the call that actually flips pending → approved sends the email, so
     // a double tap (or two admins at once) never mails twice.
     const approved = await approvePendingRegistration(registrationId);
+    // Eine Bestätigung kann das Event füllen – dann offene Bezahlfenster schließen.
+    if (approved) await onCapacityChanged(registration.event_id, false);
 
     if (approved && registration.email) {
       const event = await getEvent(registration.event_id);

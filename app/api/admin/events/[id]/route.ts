@@ -6,6 +6,7 @@ import { normalizeManualChildPrice, normalizePrice } from "@/lib/price";
 import { validateCancellationDeadline } from "@/lib/cancellation";
 import { archiveEventStripeProducts, syncStoredEventCatalog } from "@/lib/stripe-catalog";
 import { stripeProductUrl } from "@/lib/stripe";
+import { onCapacityChanged } from "@/lib/waitlist";
 
 export async function GET(
   _request: NextRequest,
@@ -84,6 +85,11 @@ export async function PUT(
 
     // Geändertes Event kann die öffentliche Liste betreffen → Cache invalidieren
     invalidateCache("events:");
+    // Mehr Plätze → die Warteliste bekommt eine Mail; weniger → offene
+    // Bezahlfenster schließen, wenn das Event jetzt voll ist.
+    if (Number(body.max_participants) !== Number(existing.max_participants)) {
+      await onCapacityChanged(eventId, existing.current_participants >= existing.max_participants);
+    }
     // Titel, Datum oder Preise können sich geändert haben – Stripe nachziehen.
     const stripe = await syncStoredEventCatalog(eventId);
     return NextResponse.json({ message: "Event aktualisiert!", stripe });

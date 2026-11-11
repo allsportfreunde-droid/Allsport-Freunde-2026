@@ -9,7 +9,7 @@ function info(overrides: Partial<RegistrationStatusInfo> = {}): RegistrationStat
     id: 1, first_name: "Test", last_name: "Person", email: "test@example.com", guests: 0,
     status: "pending", status_changed_at: null, status_note: null, created_at: "2026-09-15T10:00:00Z",
     event_title: "Sport", event_date: "2099-06-01", event_time: "12:00", event_location: "Halle",
-    event_category: "fussball", is_waitlist: false, paid_at: null, event_cancellation_deadline: null,
+    event_category: "fussball", event_id: 1, is_waitlist: false, event_full: false, paid_at: null, event_cancellation_deadline: null,
     event_price: "10 €", event_entry_price: 10, event_child_entry_price: null,
     event_dress_code: "Sport", qr_code: null, checked_in_at: null,
     persons: [{
@@ -159,6 +159,27 @@ describe("Statusseite nach der Rückkehr von Stripe", () => {
     const html = render({ payment_state: "failed" }, "abbruch");
     expect(html).toContain("Du hast die Checkout-Seite verlassen. Deine Anmeldung bleibt bestehen.");
     expect(html).not.toContain("abgebrochen");
+    expect(html).toContain("Jetzt bezahlen");
+  });
+});
+
+describe("Statusseite und Kapazität", () => {
+  it("lässt eine offene Anmeldung bezahlen, solange ein Platz frei ist", () => {
+    const html = render({ status: "pending", event_full: false });
+    expect(html).toContain("Jetzt bezahlen");
+    expect(html).toContain("Noch sind Plätze frei.");
+    expect(html).toContain("in der Reihenfolge der Zahlungen");
+  });
+
+  it("sperrt das Bezahlen einer offenen Anmeldung, wenn das Event voll ist", () => {
+    const html = render({ status: "pending", event_full: true });
+    expect(html).not.toContain("Jetzt bezahlen");
+    expect(html).toContain("du stehst auf der");
+    expect(html).toContain("Den Platz bekommt, wer zuerst");
+  });
+
+  it("lässt eine bestätigte, unbezahlte Anmeldung auch bei vollem Event bezahlen", () => {
+    const html = render({ status: "approved", event_full: true });
     expect(html).toContain("Jetzt bezahlen");
   });
 });

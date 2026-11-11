@@ -219,6 +219,10 @@ export default function StatusPage({
   const activePersons = persons.filter((p) => !p.cancelled_at);
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
+  // Plätze belegen nur bestätigte Anmeldungen. Ist das Event voll, wartet eine
+  // offene Anmeldung, bis ein Platz frei wird. Meldet der Checkout zwischendurch
+  // "ausgebucht", wird der Stand hier nachgezogen.
+  const [eventFull, setEventFull] = useState(info.event_full);
   const [discountRequests, setDiscountRequests] = useState<DiscountRequestInfo[]>(info.discount_requests ?? []);
   const requestFor = (personId: string) => discountRequests.find((r) => r.person_id === personId);
   // Offen = noch nicht entschieden; solange gibt es kein Bezahlen (der Checkout sperrt ebenso).
@@ -244,12 +248,14 @@ export default function StatusPage({
   const paymentState = info.payment_state ?? (isPaid ? "paid" : "open");
   const paymentReceived = paymentState === "paid";
   const paymentPending = paymentState === "processing" || paymentState === "checking";
+  // Offen und ausgebucht = Warteliste. Wer schon bestätigt ist, hat seinen Platz.
+  const waiting = status === "pending" && eventFull;
   const payable =
     totalPrice != null &&
     totalPrice > 0 &&
     !paymentReceived &&
     !paymentPending &&
-    !info.is_waitlist &&
+    !waiting &&
     (status === "pending" || status === "approved");
   const awaitingDiscountDecision = payable && pendingRequests.length > 0;
   const canPay = payable && !awaitingDiscountDecision;
@@ -264,6 +270,11 @@ export default function StatusPage({
         body: JSON.stringify({ status_token: token }),
       });
       const data = await res.json();
+      if (data.reason === "event_full") {
+        // Jemand anderes war schneller – zurück auf die Warteliste.
+        setEventFull(true);
+        return;
+      }
       if (!res.ok || !data.url) {
         setPayError(data.error ?? "Zahlung konnte nicht gestartet werden.");
         return;
@@ -415,26 +426,33 @@ export default function StatusPage({
           <CardContent className="space-y-4">
             {status === "pending" && (
               <div className="text-sm text-amber-700 bg-amber-50 rounded-lg p-3 space-y-2">
-                {info.is_waitlist ? (
-                  <p>
-                    Das Event war bei deiner Anmeldung bereits ausgebucht – du
-                    stehst auf der Warteliste. Wir melden uns per E-Mail, sobald
-                    ein Platz frei wird. Bezahlen musst du erst, wenn dein Platz
-                    feststeht.
-                  </p>
+                {waiting ? (
+                  totalPrice != null && totalPrice > 0 ? (
+                    <p>
+                      Das Event ist gerade ausgebucht – du stehst auf der
+                      Warteliste. Wird ein Platz frei, bekommst du eine E-Mail
+                      und kannst sofort bezahlen. Den Platz bekommt, wer zuerst
+                      bezahlt.
+                    </p>
+                  ) : (
+                    <p>
+                      Das Event ist gerade ausgebucht – du stehst auf der
+                      Warteliste. Wir melden uns per E-Mail, sobald deine
+                      Anmeldung bestätigt werden kann.
+                    </p>
+                  )
                 ) : totalPrice != null && totalPrice > 0 ? (
                   <>
                     <p>
-                      Dein Platz ist reserviert. Offen ist noch der
-                      Teilnahmebetrag von{" "}
+                      Noch sind Plätze frei. Offen ist der Teilnahmebetrag von{" "}
                       <span className="font-semibold">
                         {formatEuro(totalPrice)}
                       </span>
                       .
                     </p>
                     <p>
-                      Bezahle ihn unten, damit deine Anmeldung bestätigt werden
-                      kann.
+                      Verbindlich wird dein Platz mit der Zahlung – die freien
+                      Plätze gehen in der Reihenfolge der Zahlungen weg.
                     </p>
                   </>
                 ) : (

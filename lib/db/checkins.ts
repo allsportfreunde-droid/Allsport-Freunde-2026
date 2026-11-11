@@ -299,45 +299,6 @@ export async function getEventWaitlist(eventId: number): Promise<WaitlistEntry[]
  * the transition, so the caller sends the approval email exactly once even if
  * two admins tap "Bestätigen" at the same time.
  */
-/**
- * Bietet einer Wartelisten-Anmeldung einen frei gewordenen Platz an: das
- * Wartelisten-Flag fällt weg, der Status bleibt 'pending'. Erst damit wird
- * die Anmeldung zahlbar.
- *
- * Gibt false zurück, wenn nichts zu tun war – etwa weil zwei Admins
- * gleichzeitig geklickt haben. So verschickt nur der erste Klick die Mail.
- */
-export async function offerWaitlistSpot(registrationId: number): Promise<boolean> {
-  const sql = getSQL();
-  const rows = await sql`
-    UPDATE registrations
-    SET is_waitlist = FALSE
-    WHERE id = ${registrationId} AND status = 'pending' AND is_waitlist = TRUE
-    RETURNING id
-  `;
-  return rows.length > 0;
-}
-
-/**
- * Gegenstück zu offerWaitlistSpot: setzt eine offene, unbezahlte Anmeldung
- * zurück auf die Warteliste – etwa wenn jemand nicht online zahlt und den
- * Platz sonst blockiert. Die Anmeldung bleibt 'pending', ist aber nicht mehr
- * zahlbar und zählt nicht mehr zur Belegung.
- *
- * Gibt false zurück, wenn nichts zu tun war. So verschickt nur der erste
- * Klick die Mail.
- */
-export async function moveToWaitlist(registrationId: number): Promise<boolean> {
-  const sql = getSQL();
-  const rows = await sql`
-    UPDATE registrations
-    SET is_waitlist = TRUE
-    WHERE id = ${registrationId} AND status = 'pending' AND is_waitlist = FALSE AND paid_at IS NULL
-    RETURNING id
-  `;
-  return rows.length > 0;
-}
-
 export async function approvePendingRegistration(registrationId: number): Promise<boolean> {
   const sql = getSQL();
   const rows = await sql`

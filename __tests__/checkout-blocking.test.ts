@@ -39,7 +39,7 @@ function stripeSession(id: string, overrides: StripeSession = {}): StripeSession
 const sepaProcessing = { status: "complete", payment_intent: { id: "pi_1", status: "processing", payment_method: { type: "sepa_debit" } } };
 const info = (): CheckoutInfo => ({
   registration_id: 1, event_id: 1, event_title: "Sport", event_date: "2099-06-01", email: "test@example.com",
-  status: "pending", is_waitlist: false, paid_at: null, price: "10 €", entry_price: 10, stripe_price_id: null,
+  status: "pending", is_waitlist: false, event_full: false, paid_at: null, price: "10 €", entry_price: 10, stripe_price_id: null,
   child_entry_price: null, stripe_child_price_id: null, person_count: 1, child_count: 0, persons: [{ id: "p1", is_child: false }],
 });
 const request = () => new NextRequest("http://localhost/api/checkout", {

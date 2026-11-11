@@ -98,12 +98,10 @@ export interface EventWithRegistrations extends Event {
  * (max / current / pending) is never sent to the browser.
  */
 export function toPublicEvent(e: EventWithRegistrations): EventWithRegistrations {
-  // Count both approved and still-pending sign-ups towards the occupancy. A
-  // pending sign-up already reserves a spot, so ignoring it made the event
-  // look emptier than it really is and confused visitors. Now the public
-  // indicator reflects how many spots are effectively taken. Wartelisten-
-  // Anmeldungen stecken nicht in pending_participants – sie belegen keinen Platz.
-  const occupied = (e.current_participants ?? 0) + (e.pending_participants ?? 0);
+  // Belegt sind nur bestätigte Plätze – dieselbe Definition wie
+  // getApprovedPersonCount. Eine offene Anmeldung reserviert nichts: Den Platz
+  // bekommt, wer zuerst bezahlt (oder wen das Team bestätigt).
+  const occupied = e.current_participants ?? 0;
   const max = e.max_participants ?? 0;
   const isFull = max > 0 && occupied >= max;
   // Never round up to 100 % unless the event is actually full.
@@ -298,7 +296,14 @@ export interface RegistrationStatusInfo {
   event_time: string;
   event_location: string;
   event_category: string;
+  event_id: number;
+  /** Nur Info: Bei der Anmeldung war das Event bereits ausgebucht. Steuert nichts. */
   is_waitlist: boolean;
+  /**
+   * Alle Plätze sind durch bestätigte Anmeldungen belegt. Eine offene
+   * Anmeldung kann dann nicht bezahlen – sie wartet, bis ein Platz frei wird.
+   */
+  event_full: boolean;
   /** Zeitpunkt der Zahlung (null = noch nicht bezahlt) */
   paid_at: string | null;
   /** Eigener Stornozeitpunkt des Events (null = 24-Stunden-Regel) */
@@ -511,8 +516,10 @@ export interface CheckoutInfo extends Partial<Omit<EventStripeCatalog, "stripe_p
   stripe_price_id: string | null;
   child_entry_price: number | null;
   stripe_child_price_id: string | null;
-  /** Warteliste: es gab bei der Anmeldung keinen freien Platz */
+  /** Nur Info: Bei der Anmeldung war das Event bereits ausgebucht. Steuert nichts. */
   is_waitlist: boolean;
+  /** Alle Plätze sind durch bestätigte Anmeldungen belegt – offene Anmeldungen zahlen dann nicht. */
+  event_full: boolean;
   /** Aktive, also nicht stornierte Personen dieser Anmeldung */
   person_count: number;
   child_count: number;

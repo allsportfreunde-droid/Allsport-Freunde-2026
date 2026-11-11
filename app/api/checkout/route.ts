@@ -14,6 +14,17 @@ const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 const DISCOUNT_PENDING_MESSAGE =
   "Deine Ermäßigung wird noch geprüft. Bezahlen kannst du, sobald sie entschieden ist – du bekommst eine E-Mail.";
 
+const EVENT_FULL_MESSAGE =
+  "Das Event ist gerade ausgebucht. Du stehst auf der Warteliste – wird ein Platz frei, bekommst du eine E-Mail und kannst sofort bezahlen.";
+
+/**
+ * Plätze belegen nur bestätigte Anmeldungen (lib/waitlist.ts). Eine offene
+ * Anmeldung darf deshalb nur zahlen, solange noch ein Platz frei ist. Wer
+ * schon bestätigt ist (Team, Walk-in) und nur noch zahlt, hat seinen Platz.
+ */
+const blockedByCapacity = (info: { status: string; event_full: boolean }) =>
+  info.status === "pending" && info.event_full;
+
 /**
  * Startet eine Stripe-Zahlung für eine bestehende Anmeldung.
  *
@@ -50,17 +61,14 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
-    // Wer keinen Platz hat, darf auch nicht zahlen – sonst kassieren wir für
-    // etwas, das es noch nicht gibt. Der Button wird ohnehin nicht angezeigt;
-    // diese Prüfung gilt dem direkten Aufruf der Route.
-    if (info.is_waitlist) {
-      return NextResponse.json(
-        { error: "Für Wartelisten-Anmeldungen ist noch keine Zahlung möglich." },
-        { status: 409 }
-      );
-    }
     if (info.paid_at) {
       return NextResponse.json({ error: "Diese Anmeldung wurde bereits bezahlt." }, { status: 409 });
+    }
+    // Ist das Event voll, gibt es nichts zu verkaufen. Der Button wird dann
+    // ohnehin nicht angezeigt; diese Prüfung gilt dem direkten Aufruf und
+    // einer veralteten Statusseite.
+    if (blockedByCapacity(info)) {
+      return NextResponse.json({ error: EVENT_FULL_MESSAGE, payment_state: "open", reason: "event_full" }, { status: 409 });
     }
     if (info.person_count < 1) {
       return NextResponse.json(
@@ -99,10 +107,11 @@ export async function POST(request: NextRequest) {
 
     // Nach dem Abgleich erneut lesen: Webhook, Stornierung oder Preisänderung können inzwischen erfolgt sein.
     info = await getCheckoutInfo(token);
-    if (!info || info.registration_id !== lockedRegistrationId || info.status === "cancelled" || info.status === "rejected" || info.is_waitlist) {
+    if (!info || info.registration_id !== lockedRegistrationId || info.status === "cancelled" || info.status === "rejected") {
       throw new CheckoutBlockedError("Diese Anmeldung kann derzeit nicht bezahlt werden.", "open");
     }
     if (info.paid_at) throw new CheckoutBlockedError("Diese Anmeldung wurde bereits bezahlt.", "paid");
+    if (blockedByCapacity(info)) throw new CheckoutBlockedError(EVENT_FULL_MESSAGE, "open");
     if ((info.pending_discount_requests ?? 0) > 0) throw new CheckoutBlockedError(DISCOUNT_PENDING_MESSAGE, "open");
     pricing = calculatePersonsPrice(info, info.persons);
     if (!pricing || pricing.totalCents === 0) {
@@ -194,7 +203,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ url: session.url });
   } catch (error) {
     if (error instanceof CheckoutBlockedError) {
-      return NextResponse.json({ error: error.message, payment_state: error.paymentState }, { status: 409 });
+      return NextResponse.json({
+        error: error.message,
+        payment_state: error.paymentState,
+        ...(error.message === EVENT_FULL_MESSAGE ? { reason: "event_full" } : {}),
+      }, { status: 409 });
     }
     console.error("Fehler beim Starten der Zahlung:", error);
     return NextResponse.json(

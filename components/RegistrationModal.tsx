@@ -74,6 +74,8 @@ export default function RegistrationModal({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [statusToken, setStatusToken] = useState<string | null>(null);
+  /** Entscheidung des Servers: Warteliste oder nicht – unabhängig vom Seitenstand. */
+  const [waitlisted, setWaitlisted] = useState<boolean | null>(null);
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
   const [discountConsent, setDiscountConsent] = useState(false);
@@ -98,6 +100,7 @@ export default function RegistrationModal({
     setError(null);
     setSuccess(false);
     setStatusToken(null);
+    setWaitlisted(null);
     setPayLoading(false);
     setPayError(null);
     setDiscountConsent(false);
@@ -222,6 +225,9 @@ export default function RegistrationModal({
 
       setSuccess(true);
       setStatusToken(data.status_token || null);
+      // Vor onSuccess setzen: Die geteilte Event-Seite lädt danach neu, und
+      // ein frisch belegter letzter Platz darf den Erfolgs-Screen nicht kippen.
+      setWaitlisted(typeof data.is_waitlist === "boolean" ? data.is_waitlist : null);
       onSuccess();
 
       // Nachweise einzeln hochladen – autorisiert über den eben erhaltenen Token.
@@ -249,6 +255,8 @@ export default function RegistrationModal({
   if (!event) return null;
 
   const isFull = event.is_full ?? false;
+  // Nach dem Absenden zählt, was der Server entschieden hat.
+  const onWaitlist = waitlisted ?? isFull;
 
   // Erkannte Ermäßigung gilt sofort, beantragte vorbehaltlich der Prüfung.
   const pricedPersons = persons.map((p, idx) => ({
@@ -287,10 +295,10 @@ export default function RegistrationModal({
           <div className="text-center py-6">
             <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" />
             <h3 className="text-xl font-bold text-gray-900 mb-2">
-              {isFull ? "Auf der Warteliste!" : "Anmeldung eingegangen!"}
+              {onWaitlist ? "Auf der Warteliste!" : "Anmeldung eingegangen!"}
             </h3>
             <p className="text-gray-600 mb-1">
-              {isFull
+              {onWaitlist
                 ? "Deine Anmeldung für die Warteliste wird nun geprüft:"
                 : "Deine Anmeldung wird nun geprüft:"}
             </p>
@@ -311,7 +319,7 @@ export default function RegistrationModal({
               <div className="bg-green-50 rounded-lg p-3 mb-3 text-left">
                 <p className="text-xs font-semibold text-green-700 mb-1">
                   {persons.length} {persons.length === 1 ? "Person" : "Personen"}{" "}
-                  {isFull ? "auf der Warteliste" : "angemeldet"}:
+                  {onWaitlist ? "auf der Warteliste" : "angemeldet"}:
                 </p>
                 {persons.map((p, i) => (
                   <p key={i} className="text-sm text-green-900">
@@ -321,9 +329,13 @@ export default function RegistrationModal({
               </div>
             )}
             <p className="text-sm text-amber-600 bg-amber-50 rounded-lg p-3 mb-4">
-              {isFull
-                ? "Du stehst auf der Warteliste. Wir melden uns per E-Mail, sobald ein Platz frei wird oder deine Anmeldung bestätigt wurde."
-                : "Du erhältst eine E-Mail, sobald deine Anmeldung bestätigt wurde."}
+              {onWaitlist
+                ? totalPrice != null && totalPrice > 0
+                  ? "Du stehst auf der Warteliste. Wird ein Platz frei, bekommst du eine E-Mail und kannst sofort bezahlen – den Platz bekommt, wer zuerst bezahlt."
+                  : "Du stehst auf der Warteliste. Wir melden uns per E-Mail, sobald ein Platz frei wird oder deine Anmeldung bestätigt wurde."
+                : totalPrice != null && totalPrice > 0
+                  ? "Verbindlich wird dein Platz mit der Zahlung – die freien Plätze gehen in der Reihenfolge der Zahlungen weg. Bezahle am besten gleich."
+                  : "Du erhältst eine E-Mail, sobald deine Anmeldung bestätigt wurde."}
             </p>
             {requestCount > 0 && (
               <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 mb-4 text-left text-sm text-amber-900 space-y-2" aria-live="polite">
@@ -367,7 +379,7 @@ export default function RegistrationModal({
                 )}
               </div>
             )}
-            {statusToken && totalPrice != null && totalPrice > 0 && !isFull && requestCount === 0 && (
+            {statusToken && totalPrice != null && totalPrice > 0 && !onWaitlist && requestCount === 0 && (
               <div className="border border-gray-200 rounded-lg p-4 mb-4 text-left">
                 <p className="text-sm font-semibold text-gray-900">
                   Anmeldung bestätigen
@@ -437,9 +449,9 @@ export default function RegistrationModal({
             <form onSubmit={handleSubmit} className="space-y-5">
               {isFull && (
                 <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg p-3">
-                  Das Event ist aktuell ausgebucht. Mit dieser Anmeldung setzen
-                  wir dich auf die Warteliste und melden uns, sobald ein Platz
-                  frei wird.
+                  Das Event ist aktuell ausgebucht. Mit dieser Anmeldung kommst
+                  du auf die Warteliste. Wird ein Platz frei, melden wir uns per
+                  E-Mail.
                 </div>
               )}
               {/* Contact */}
@@ -692,8 +704,8 @@ export default function RegistrationModal({
                 {totalPrice != null && totalPrice > 0 && (
                   <p className="mt-1 text-xs text-gray-500">
                     {isFull
-                      ? "Der Betrag wird erst fällig, wenn du von der Warteliste nachrückst."
-                      : "Der Betrag wird mit der Bestätigung deiner Anmeldung fällig."}
+                      ? "Bezahlen kannst du erst, wenn ein Platz frei wird – dann bekommst du eine E-Mail. Den Platz bekommt, wer zuerst bezahlt."
+                      : "Verbindlich wird dein Platz mit der Zahlung direkt nach der Anmeldung."}
                   </p>
                 )}
               </div>

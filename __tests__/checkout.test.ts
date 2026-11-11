@@ -24,7 +24,7 @@ vi.mock("@/lib/ratelimit", () => ({ checkRateLimit: () => true, getClientIp: () 
 function info(overrides: Partial<CheckoutInfo> = {}): CheckoutInfo {
   return {
     registration_id: 1, event_id: 1, event_title: "Sport", event_date: "2099-06-01",
-    email: "test@example.com", status: "pending", is_waitlist: false, paid_at: null,
+    email: "test@example.com", status: "pending", is_waitlist: false, event_full: false, paid_at: null,
     price: "10 €", entry_price: 10, stripe_price_id: "price_adult",
     child_entry_price: 4, stripe_child_price_id: "price_child",
     person_count: 3, child_count: 1, ...overrides,
@@ -136,7 +136,7 @@ describe("Checkout mit Erwachsenen und Kindern", () => {
   });
 
   it.each([
-    { is_waitlist: true }, { status: "cancelled" as const }, { status: "rejected" as const },
+    { event_full: true }, { status: "cancelled" as const }, { status: "rejected" as const },
     { paid_at: "2026-09-15T10:00:00Z" }, { person_count: 0, child_count: 0 },
     { price: "Spende willkommen", child_entry_price: null },
   ])("verhindert eine Zahlung bei %j", async (overrides) => {

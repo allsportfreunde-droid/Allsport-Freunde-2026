@@ -1,6 +1,7 @@
-import { cancelRegistrationByToken } from "@/lib/db";
+import { cancelRegistrationByToken, getRegistrationByToken, isEventFull } from "@/lib/db";
 import { CancellationBlockedError } from "@/lib/cancellation";
 import { refundAndNotifyCancellation } from "@/lib/cancellation-refund";
+import { onCapacityChanged } from "@/lib/waitlist";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(
@@ -9,6 +10,10 @@ export async function POST(
 ) {
   try {
     const { token } = await params;
+    // Stand vor der Stornierung – wird das Event dadurch wieder frei, bekommt
+    // die Warteliste eine Mail (lib/waitlist.ts).
+    const before = await getRegistrationByToken(token);
+    const wasFull = before ? await isEventFull(before.event_id) : false;
     const info = await cancelRegistrationByToken(token);
 
     if (!info) {
@@ -30,6 +35,7 @@ export async function POST(
       eventLocation: info.event_location,
       statusToken: token,
     });
+    if (!info.alreadyCancelled) await onCapacityChanged(info.event_id, wasFull);
 
     return NextResponse.json({
       message: "Anmeldung erfolgreich storniert.",

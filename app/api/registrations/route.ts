@@ -1,6 +1,6 @@
 import {
   getEvent,
-  getRegistrationCount,
+  isEventFull,
   findRegistration,
   getRecognizableDiscounts,
 } from "@/lib/db";
@@ -14,7 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { RegistrationRequest } from "@/lib/types";
 import { checkRateLimit, getClientIp, RATE_LIMITS } from "@/lib/ratelimit";
 import { honeypotFailure } from "@/lib/honeypot";
-import { formatPersonsPriceLabel } from "@/lib/price-tiers";
+import { calculateTierPrices, formatPersonsPriceLabel } from "@/lib/price-tiers";
 import { matchDiscount } from "@/lib/discount-holders";
 import { parseDiscountRequest } from "@/lib/discount-requests";
 import { berlinToday } from "@/lib/review";
@@ -125,14 +125,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Hinweis: Es gibt bewusst keine harte Kapazitätsgrenze mehr. Ist ein Event
-    // ausgebucht, landen weitere Anmeldungen als normale "pending"-Anmeldungen
-    // auf der Warteliste und können vom Team angenommen werden – auch über die
-    // Kapazität hinaus. Wir merken uns nur, ob das Event bereits voll war, um
-    // die passende Bestätigungs-E-Mail (Warteliste vs. normale Anmeldung) zu
-    // verschicken. Dieselbe Definition wie im Frontend-Button.
-    const currentCount = await getRegistrationCount(event_id);
-    const isWaitlist = currentCount >= event.max_participants;
+    // Eine Anmeldung belegt keinen Platz – das tun nur bestätigte (siehe
+    // lib/waitlist.ts). Es gibt deshalb keine harte Grenze: Ist das Event
+    // ausgebucht, wird trotzdem angemeldet, nur bezahlen geht dann erst, wenn
+    // wieder ein Platz frei ist. Gemerkt wird nur, ob das Event bei der
+    // Anmeldung voll war – das entscheidet die Eingangsmail. Gruppen dürfen
+    // überbuchen: Es reicht, dass vor der Zahlung ein Platz frei ist.
+    const isWaitlist = await isEventFull(event_id);
 
     if (persons.length > maxPerEmail) {
       return NextResponse.json(
@@ -222,9 +221,8 @@ export async function POST(request: NextRequest) {
     };
 
     if (isWaitlist) {
-      // Auf der Warteliste ist nichts zu zahlen – erst wenn ein Platz
-      // angeboten wird.
-      sendWaitlistReceivedEmail(emailData);
+      // Auf der Warteliste ist nichts zu zahlen – erst wenn ein Platz frei wird.
+      sendWaitlistReceivedEmail({ ...emailData, paid: calculateTierPrices(event) != null });
     } else {
       const deadline = cancellationDeadline({
         event_date: event.date,
@@ -246,6 +244,9 @@ export async function POST(request: NextRequest) {
         message: "Anmeldung erfolgreich!",
         event_title: event.title,
         status_token: statusToken,
+        // Das Formular zeigt Warteliste oder Bezahlen nach dieser Entscheidung,
+        // nicht nach dem Stand beim Laden der Seite.
+        is_waitlist: isWaitlist,
         // Damit das Formular die Nachweise den richtigen Anträgen zuordnet.
         discount_requests: createdRequests,
       },

@@ -1,8 +1,10 @@
 import {
   getCancellationTokenInfo,
   cancelRegistrationByCancellationToken,
+  isEventFull,
 } from "@/lib/db";
 import { refundAndNotifyCancellation } from "@/lib/cancellation-refund";
+import { onCapacityChanged } from "@/lib/waitlist";
 import { NextRequest, NextResponse } from "next/server";
 import { CancellationBlockedError } from "@/lib/cancellation";
 
@@ -53,6 +55,10 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // Stand vor der Stornierung – wird das Event dadurch wieder frei, bekommt
+    // die Warteliste eine Mail (lib/waitlist.ts).
+    const before = await getCancellationTokenInfo(token);
+    const wasFull = before ? await isEventFull(before.eventId) : false;
     const result = await cancelRegistrationByCancellationToken(token);
     if (result.status !== 'cancelled') {
       return NextResponse.json({ status: result.status }, { status: result.status === 'not_found' ? 404 : 200 });
@@ -71,6 +77,7 @@ export async function POST(request: NextRequest) {
         statusToken: info.statusToken,
       });
     }
+    await onCapacityChanged(info.eventId, wasFull);
 
     return NextResponse.json({
       status: "cancelled",

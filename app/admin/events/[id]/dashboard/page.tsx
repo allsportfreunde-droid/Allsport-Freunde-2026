@@ -28,7 +28,6 @@ import {
   Banknote,
   Euro,
   Hourglass,
-  Mail,
   ChevronDown,
   Smartphone,
   PenLine,
@@ -621,29 +620,6 @@ export default function CheckinDashboardPage() {
     }
   }
 
-  /**
-   * Bietet einer Wartelisten-Anmeldung einen frei gewordenen Platz an. Die
-   * Anmeldung bleibt offen – sie wird nur zahlbar und bekommt eine E-Mail.
-   */
-  async function handleWaitlistOffer(registrationId: number) {
-    setWaitlistRegLoadingId(registrationId);
-    setWaitlistError(null);
-    try {
-      const res = await fetch("/api/checkin/waitlist/offer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ registrationId }),
-      });
-      const body = await res.json();
-      if (!res.ok) setWaitlistError(body.error ?? "Fehler beim Anbieten des Platzes.");
-      else await fetchStatus();
-    } catch {
-      setWaitlistError("Netzwerkfehler.");
-    } finally {
-      setWaitlistRegLoadingId(null);
-    }
-  }
-
   async function handleUndo(participantId: number) {
     setUndoId(participantId);
     setError(null);
@@ -1108,10 +1084,10 @@ export default function CheckinDashboardPage() {
                   Warteliste – noch nicht bestätigte Anmeldungen
                 </p>
                 <p className="text-xs text-amber-700 mt-1">
-                  Diese Anmeldungen sind eingegangen, als das Event bereits ausgebucht war.
-                  Wird ein Platz frei, biete ihn mit „Platz anbieten“ an: die Anmeldung
-                  kann dann bezahlen und bekommt eine E-Mail. „Bestätigen“ überspringt die
-                  Zahlung und schickt direkt die Bestätigung mit QR-Code.
+                  Offene Anmeldungen belegen keinen Platz – den bekommt, wer zuerst bezahlt.
+                  Wird durch eine Stornierung ein Platz frei, bekommen alle Unbezahlten
+                  automatisch eine E-Mail. „Bestätigen“ überspringt die Zahlung und schickt
+                  direkt die Bestätigung mit QR-Code.
                 </p>
               </div>
 
@@ -1138,7 +1114,6 @@ export default function CheckinDashboardPage() {
                     entry={entry}
                     position={waitlist.indexOf(entry) + 1}
                     onConfirm={handleWaitlistConfirm}
-                    onOffer={handleWaitlistOffer}
                     regLoadingId={waitlistRegLoadingId}
                     personLoadingId={waitlistPersonLoadingId}
                   />
@@ -2113,7 +2088,6 @@ function WaitlistRow({
   entry,
   position,
   onConfirm,
-  onOffer,
   regLoadingId,
   personLoadingId,
 }: {
@@ -2123,7 +2097,6 @@ function WaitlistRow({
     registrationId: number,
     options?: { personIds?: string[]; checkinAll?: boolean }
   ) => void;
-  onOffer: (registrationId: number) => void;
   regLoadingId: number | null;
   personLoadingId: string | null;
 }) {
@@ -2153,7 +2126,7 @@ function WaitlistRow({
                 </span>
               ) : (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 leading-none">
-                  Platz angeboten
+                  Zahlung offen
                 </span>
               )}
             </p>
@@ -2169,21 +2142,6 @@ function WaitlistRow({
 
         <div className="flex items-center gap-2 shrink-0">
           <RegistrationDetailButton registrationId={entry.id} />
-          {entry.is_waitlist && (
-            <button
-              onClick={() => onOffer(entry.id)}
-              disabled={anyBusy}
-              title="Platz anbieten – die Anmeldung wird zahlbar und bekommt eine E-Mail"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-blue-200 hover:border-blue-300 hover:bg-blue-50 text-blue-700 rounded-lg transition-colors disabled:opacity-50"
-            >
-              {regBusy ? (
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Mail className="w-3.5 h-3.5" />
-              )}
-              Platz anbieten
-            </button>
-          )}
           <button
             onClick={() => onConfirm(entry.id)}
             disabled={anyBusy}

@@ -96,7 +96,7 @@ function recomputeParticipants(eventId: number) {
     .filter((r) => r.event_id === eventId && r.status === "approved")
     .reduce((sum, r) => sum + 1 + r.guests, 0);
   event.pending_participants = localRegistrations
-    .filter((r) => r.event_id === eventId && r.status === "pending" && !r.is_waitlist)
+    .filter((r) => r.event_id === eventId && r.status === "pending")
     .reduce((sum, r) => sum + 1 + r.guests, 0);
 }
 
@@ -220,16 +220,15 @@ export function getLocalEvent(id: number) {
 }
 
 export function getLocalRegistrationCount(eventId: number): number {
-  // Approved *and* pending sign-ups count towards the taken spots – see
-  // getRegistrationCount / toPublicEvent for the rationale.
+  // Nur bestätigte Anmeldungen belegen Plätze – siehe getApprovedPersonCount.
   return localRegistrations
-    .filter(
-      (r) =>
-        r.event_id === eventId &&
-        (r.status === "approved" || r.status === "pending") &&
-        !r.is_waitlist
-    )
+    .filter((r) => r.event_id === eventId && r.status === "approved")
     .reduce((sum, r) => sum + 1 + r.guests, 0);
+}
+
+function isLocalEventFull(eventId: number): boolean {
+  const event = localEvents.find((e) => e.id === eventId);
+  return !!event && getLocalRegistrationCount(eventId) >= event.max_participants;
 }
 
 export function findLocalRegistration(eventId: number, email: string) {
@@ -363,7 +362,9 @@ export function getLocalRegistrationByToken(token: string): RegistrationStatusIn
     email: reg.email ?? "",
     guests: reg.guests,
     status: reg.status,
+    event_id: event.id,
     is_waitlist: reg.is_waitlist,
+    event_full: isLocalEventFull(event.id),
     paid_at: null,
     status_note: reg.status_note,
     status_changed_at: reg.status_changed_at,
@@ -408,6 +409,7 @@ export function getLocalCheckoutInfo(token: string): CheckoutInfo | null {
     email: reg.email,
     status: reg.status,
     is_waitlist: reg.is_waitlist,
+    event_full: isLocalEventFull(event.id),
     event_id: event.id,
     event_title: event.title,
     event_date: event.date,

@@ -15,17 +15,12 @@ import type {
 } from "../types";
 
 /**
- * Number of spots that are effectively taken for an event: approved *and*
- * still-pending sign-ups. A pending sign-up already reserves a spot, so it
- * has to count towards "is the event full?" – otherwise the public occupancy
- * indicator and the waitlist confirmation e-mail would disagree. Kept in sync
- * with the same definition in `toPublicEvent`.
- *
- * Wartelisten-Anmeldungen belegen keinen Platz – auch nicht, wenn das Team
- * jemanden wegen fehlender Zahlung dorthin zurückgesetzt hat. Sonst bliebe
- * das Event öffentlich "ausgebucht".
+ * Belegte Plätze eines Events: nicht stornierte Personen aus *bestätigten*
+ * Anmeldungen. Eine offene Anmeldung reserviert nichts – den Platz bekommt,
+ * wer zuerst bezahlt oder wen das Team bestätigt. Dieselbe Definition wie
+ * `current_participants` in lib/db/events.ts und damit wie `toPublicEvent`.
  */
-export async function getRegistrationCount(eventId: number): Promise<number> {
+export async function getApprovedPersonCount(eventId: number): Promise<number> {
   if (!isPostgresConfigured()) {
     const { getLocalRegistrationCount } = await import("../local-data");
     return getLocalRegistrationCount(eventId);
@@ -36,9 +31,35 @@ export async function getRegistrationCount(eventId: number): Promise<number> {
     SELECT COUNT(rp.id)::int AS count
     FROM registrations r
     JOIN registration_persons rp ON rp.registration_id = r.id AND rp.cancelled_at IS NULL
-    WHERE r.event_id = ${eventId} AND r.status IN ('approved', 'pending') AND NOT r.is_waitlist
+    WHERE r.event_id = ${eventId} AND r.status = 'approved'
   `;
   return (rows[0] as { count: number }).count;
+}
+
+/**
+ * Sind alle Plätze durch bestätigte Anmeldungen belegt? Dann landen neue
+ * Anmeldungen auf der Warteliste, und offene Anmeldungen können nicht zahlen.
+ *
+ * Gruppen dürfen überbuchen: Entscheidend ist nur, ob noch mindestens ein
+ * Platz frei ist – nicht, ob alle Personen einer Anmeldung hineinpassen.
+ */
+export async function isEventFull(eventId: number): Promise<boolean> {
+  if (!isPostgresConfigured()) {
+    const { getLocalEvent, getLocalRegistrationCount } = await import("../local-data");
+    const event = getLocalEvent(eventId);
+    return !!event && getLocalRegistrationCount(eventId) >= event.max_participants;
+  }
+
+  const sql = getSQL();
+  const rows = await sql`
+    SELECT (
+      SELECT COUNT(rp.id) FROM registrations r
+      JOIN registration_persons rp ON rp.registration_id = r.id AND rp.cancelled_at IS NULL
+      WHERE r.event_id = e.id AND r.status = 'approved'
+    ) >= e.max_participants AS full
+    FROM events e WHERE e.id = ${eventId}
+  `;
+  return (rows[0] as { full: boolean } | undefined)?.full ?? false;
 }
 
 export async function findRegistration(
@@ -123,8 +144,11 @@ export async function getRegistrationByToken(token: string, transaction?: Regist
   const sql = transaction ?? getSQL();
   const rows = await sql`
     SELECT
-      r.id, r.email,
+      r.id, r.email, r.event_id,
       r.status, r.status_note, r.status_changed_at, r.created_at, r.is_waitlist, r.paid_at, r.amount_paid::float8 AS amount_paid,
+      (SELECT COUNT(rp2.id) FROM registrations r2
+        JOIN registration_persons rp2 ON rp2.registration_id = r2.id AND rp2.cancelled_at IS NULL
+        WHERE r2.event_id = e.id AND r2.status = 'approved') >= e.max_participants AS event_full,
       EXISTS (SELECT 1 FROM checkout_pricing cp WHERE cp.registration_id = r.id AND cp.payment_state IN ('processing', 'paid')) AS payment_in_progress,
       r.qr_code, r.checked_in_at,
       COALESCE((SELECT rp.first_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS first_name,
@@ -561,6 +585,7 @@ export async function generateCancellationToken(
 export interface CancellationTokenInfo {
   paymentInProgress?: boolean;
   registrationId: number;
+  eventId: number;
   expiresAt: string;
   usedAt: string | null;
   registrationStatus: string;
@@ -585,6 +610,7 @@ export async function getCancellationTokenInfo(
   const rows = await sql`
     SELECT
       ct.registration_id,
+      r.event_id,
       (ct.expires_at AT TIME ZONE 'UTC')::text AS expires_at,
       ct.used_at::text,
       r.status        AS registration_status,
@@ -606,6 +632,7 @@ export async function getCancellationTokenInfo(
   `;
   const row = rows[0] as {
     registration_id: number;
+    event_id: number;
     expires_at: string;
     payment_in_progress: boolean;
     used_at: string | null;
@@ -624,6 +651,7 @@ export async function getCancellationTokenInfo(
   if (!row) return null;
   return {
     registrationId: row.registration_id,
+    eventId: row.event_id,
     expiresAt: row.expires_at,
     usedAt: row.used_at,
     registrationStatus: row.registration_status,
@@ -781,6 +809,9 @@ export async function getCheckoutInfo(token: string): Promise<CheckoutInfo | nul
   const rows = await sql`
     SELECT
       r.id AS registration_id, r.email, r.status, r.is_waitlist, r.paid_at,
+      (SELECT COUNT(rp2.id) FROM registrations r2
+        JOIN registration_persons rp2 ON rp2.registration_id = r2.id AND rp2.cancelled_at IS NULL
+        WHERE r2.event_id = e.id AND r2.status = 'approved') >= e.max_participants AS event_full,
       EXTRACT(EPOCH FROM (r.created_at AT TIME ZONE 'UTC'))::float8 AS registration_created_unix,
       e.id AS event_id, e.title AS event_title, TO_CHAR(e.date, 'YYYY-MM-DD') AS event_date,
       e.price, e.entry_price::float8 AS entry_price, e.stripe_price_id,
@@ -844,8 +875,7 @@ export async function markRegistrationPaid(
         amount_paid = ${amount},
         paid_person_prices = ${personPrices == null ? null : JSON.stringify(personPrices)}::jsonb,
         stripe_session_id = ${sessionId},
-        stripe_payment_intent_id = ${paymentIntentId},
-        is_waitlist = FALSE
+        stripe_payment_intent_id = ${paymentIntentId}
       WHERE id = ${registrationId}
         AND paid_at IS NULL
       RETURNING id

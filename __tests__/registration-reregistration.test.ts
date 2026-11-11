@@ -35,22 +35,23 @@ function fakeSql(strings: TemplateStringsArray, ...values: unknown[]) {
 
 const mocks = vi.hoisted(() => ({
   getEvent: vi.fn(),
-  getRegistrationCount: vi.fn(),
+  isEventFull: vi.fn(),
   findRegistration: vi.fn(),
   getRecognizableDiscounts: vi.fn(),
   receivedMail: vi.fn(),
+  waitlistMail: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   getEvent: mocks.getEvent,
-  getRegistrationCount: mocks.getRegistrationCount,
+  isEventFull: mocks.isEventFull,
   findRegistration: mocks.findRegistration,
   getRecognizableDiscounts: mocks.getRecognizableDiscounts,
 }));
 vi.mock("@/lib/db/utils", () => ({ getSQL: () => fakeSql }));
 vi.mock("@/lib/email", () => ({
   sendRegistrationReceivedEmail: mocks.receivedMail,
-  sendWaitlistReceivedEmail: vi.fn(),
+  sendWaitlistReceivedEmail: mocks.waitlistMail,
 }));
 vi.mock("@/lib/ratelimit", () => ({
   checkRateLimit: () => true,
@@ -79,7 +80,7 @@ beforeEach(() => {
     child_entry_price: null,
     cancellation_deadline: null,
   });
-  mocks.getRegistrationCount.mockResolvedValue(0);
+  mocks.isEventFull.mockResolvedValue(false);
   mocks.findRegistration.mockResolvedValue({ id: 11, status: "cancelled", status_token: "old-token" });
   mocks.getRecognizableDiscounts.mockResolvedValue([]);
 });
@@ -172,5 +173,28 @@ describe("Ermäßigung bei der Anmeldung", () => {
 
     expect(response.status).toBe(201);
     expect(personInserts()[0].values).toEqual([22, "Ada", "Alt", false, null]);
+  });
+});
+
+describe("Platz oder Warteliste", () => {
+  it("meldet bei freien Plätzen normal an und sagt das dem Formular", async () => {
+    const response = await POST(registrationRequest([{ firstName: "Ada", lastName: "Alt" }]));
+
+    expect(response.status).toBe(201);
+    expect((await response.json()).is_waitlist).toBe(false);
+    expect(mocks.receivedMail).toHaveBeenCalled();
+    expect(mocks.waitlistMail).not.toHaveBeenCalled();
+  });
+
+  it("trägt bei vollem Event auf die Warteliste ein – mit Hinweis aufs Bezahlen, sobald frei", async () => {
+    mocks.isEventFull.mockResolvedValue(true);
+    const response = await POST(registrationRequest([{ firstName: "Ada", lastName: "Alt" }]));
+
+    expect(response.status).toBe(201);
+    expect((await response.json()).is_waitlist).toBe(true);
+    const registrationInsert = recorded.find(query => query.text.includes("INSERT INTO registrations"));
+    expect(registrationInsert?.values.at(-1)).toBe(true);
+    expect(mocks.waitlistMail).toHaveBeenCalledWith(expect.objectContaining({ to: "gast@example.com", paid: true }));
+    expect(mocks.receivedMail).not.toHaveBeenCalled();
   });
 });
