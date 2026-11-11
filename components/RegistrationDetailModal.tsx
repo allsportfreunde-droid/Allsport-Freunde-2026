@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { X, Loader2, User, Users, Calendar, CheckCircle2, Info, Euro, ExternalLink } from "lucide-react";
 import StatusBadge from "@/components/status/StatusBadge";
 import ChildBadge from "@/components/ChildBadge";
+import DiscountBadge from "@/components/DiscountBadge";
 import PaidBadge from "@/components/PaidBadge";
 import type { RegistrationDetail } from "@/lib/types";
 import { formatEuro } from "@/lib/finance";
@@ -177,6 +178,9 @@ export default function RegistrationDetailModal({
                           {person.first_name} {person.last_name}
                           {person.is_child && (
                             <ChildBadge className="ml-1.5 align-middle" />
+                          )}
+                          {person.discount && (
+                            <DiscountBadge discount={person.discount} className="ml-1.5 align-middle" />
                           )}
                           {idx === 0 && (
                             <span className="ml-1.5 text-xs text-gray-400 font-normal">

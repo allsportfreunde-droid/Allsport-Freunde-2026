@@ -101,10 +101,11 @@ beforeEach(() => {
   stripeState.current = stripe.client;
 });
 
+
 async function create(body: object = eventInput) {
   const response = await POST(request(body));
   expect(response.status).toBe(201);
-  return response.json() as Promise<{ id: number; stripe: { status: string; error?: string; product_url?: string } }>;
+  return response.json() as Promise<{ id: number; stripe: { status: string; error?: string } }>;
 }
 
 async function update(id: number, body: object) {
@@ -113,71 +114,103 @@ async function update(id: number, body: object) {
   return (await response.json()).stripe as { status: string; error?: string };
 }
 
-/** Aktive Preise des Produkts als { tier: Cent }. */
-function activeAmounts(productId: string) {
-  return Object.fromEntries(
-    stripe.prices.filter((p) => p.product === productId && p.active).map((p) => [p.metadata.tier, p.unit_amount])
-  );
+const event = (id: number) => getLocalEventFull(id)!;
+const products = (id: number) => event(id).stripe_tier_products ?? {};
+
+/** Aktive Preise aller Produkte als { tier: Cent }. */
+function activeAmounts() {
+  return Object.fromEntries(stripe.prices.filter((p) => p.active).map((p) => [p.metadata.tier, p.unit_amount]));
 }
 
-describe("Stripe-Produkt beim Speichern eines Events", () => {
-  it("legt ein Produkt mit sechs Preisen an und speichert die IDs", async () => {
-    const { id, stripe: result } = await create();
-    const event = getLocalEventFull(id)!;
+/** Namen der aktiven Produkte, sortiert. */
+function activeProductNames() {
+  return [...stripe.products.values()].filter((p) => p.active).map((p) => p.name).sort();
+}
 
-    expect(result).toEqual({ status: "synced", product_url: `https://dashboard.stripe.com/test/products/${event.stripe_product_id}` });
-    expect(stripe.products.get(event.stripe_product_id!)).toMatchObject({
-      name: "Hallenfußball · 01.06.2099", active: true, metadata: { event_id: String(id) },
-    });
-    expect(activeAmounts(event.stripe_product_id!)).toEqual({
+const ALL_TIERS = ["adult", "child", "adult_reduced_30", "adult_reduced_50", "child_reduced_30", "child_reduced_50"];
+
+describe("Stripe-Produkte je Preisstufe", () => {
+  it("legt mit Kinderpreis sechs Produkte mit je einem Preis an und speichert die IDs", async () => {
+    const { id, stripe: result } = await create();
+    expect(result).toEqual({ status: "synced" });
+
+    expect(Object.keys(products(id)).sort()).toEqual([...ALL_TIERS].sort());
+    expect(activeProductNames()).toEqual([
+      "Hallenfußball · 01.06.2099 – Erwachsene",
+      "Hallenfußball · 01.06.2099 – Erwachsene (30 % ermäßigt)",
+      "Hallenfußball · 01.06.2099 – Erwachsene (50 % ermäßigt)",
+      "Hallenfußball · 01.06.2099 – Kinder",
+      "Hallenfußball · 01.06.2099 – Kinder (30 % ermäßigt)",
+      "Hallenfußball · 01.06.2099 – Kinder (50 % ermäßigt)",
+    ]);
+    expect(activeAmounts()).toEqual({
       adult: 1200, child: 600, adult_reduced_30: 840, adult_reduced_50: 600, child_reduced_30: 420, child_reduced_50: 300,
     });
-    const byTier = (tier: string) => stripe.prices.find((p) => p.metadata.tier === tier)!.id;
-    expect(event).toMatchObject({
-      stripe_price_id: byTier("adult"),
-      stripe_child_price_id: byTier("child"),
-      stripe_adult_reduced_30_price_id: byTier("adult_reduced_30"),
-      stripe_adult_reduced_50_price_id: byTier("adult_reduced_50"),
-      stripe_child_reduced_30_price_id: byTier("child_reduced_30"),
-      stripe_child_reduced_50_price_id: byTier("child_reduced_50"),
+
+    // Jeder Preis hängt am Produkt seiner Stufe, und die Price ID steht in der passenden Spalte.
+    const priceOf = (tier: string) => stripe.prices.find((p) => p.metadata.tier === tier)!;
+    for (const tier of ALL_TIERS) {
+      expect(priceOf(tier).product).toBe(products(id)[tier as keyof ReturnType<typeof products>]);
+      expect(stripe.products.get(priceOf(tier).product)!.metadata).toEqual({ event_id: String(id), tier });
+    }
+    expect(event(id)).toMatchObject({
+      stripe_price_id: priceOf("adult").id,
+      stripe_child_price_id: priceOf("child").id,
+      stripe_adult_reduced_50_price_id: priceOf("adult_reduced_50").id,
+      stripe_child_reduced_30_price_id: priceOf("child_reduced_30").id,
     });
-    expect(stripe.prices.every((p) => p.currency === "eur" && p.metadata.event_id === String(id))).toBe(true);
+  });
+
+  it("legt ohne Kinderpreis nur die drei Eintrittsprodukte an", async () => {
+    const { id } = await create({ ...eventInput, child_entry_price: null });
+    expect(Object.keys(products(id)).sort()).toEqual(["adult", "adult_reduced_30", "adult_reduced_50"]);
+    expect(activeProductNames()).toEqual([
+      "Hallenfußball · 01.06.2099 – Eintritt",
+      "Hallenfußball · 01.06.2099 – Eintritt (30 % ermäßigt)",
+      "Hallenfußball · 01.06.2099 – Eintritt (50 % ermäßigt)",
+    ]);
+    expect(event(id)).toMatchObject({ stripe_child_price_id: null, stripe_child_reduced_50_price_id: null });
+    expect(event(id).stripe_price_id).toMatch(/^price_/);
   });
 
   it("ignoriert Price IDs aus dem Browser", async () => {
     const { id } = await create({ ...eventInput, stripe_price_id: "price_fremd", stripe_child_price_id: "price_fremd" });
-    expect(getLocalEventFull(id)!.stripe_price_id).not.toBe("price_fremd");
-    expect(getLocalEventFull(id)!.stripe_child_price_id).not.toBe("price_fremd");
+    expect(event(id).stripe_price_id).not.toBe("price_fremd");
+    expect(event(id).stripe_child_price_id).not.toBe("price_fremd");
   });
 
-  it("legt bei unverändertem Preis nichts neu an und übernimmt einen neuen Titel", async () => {
+  it("legt bei unverändertem Preis nichts neu an und benennt bei neuem Titel alle Produkte um", async () => {
     const { id } = await create();
-    const before = { ...getLocalEventFull(id)! };
+    const before = { ...event(id) };
     stripe.client.prices.create.mockClear();
+    stripe.client.products.create.mockClear();
 
     expect((await update(id, { ...eventInput, title: "Hallenfußball Mixed" })).status).toBe("synced");
     expect(stripe.client.prices.create).not.toHaveBeenCalled();
-    expect(getLocalEventFull(id)).toMatchObject({
-      stripe_product_id: before.stripe_product_id,
+    expect(stripe.client.products.create).not.toHaveBeenCalled();
+    expect(event(id)).toMatchObject({
+      stripe_tier_products: before.stripe_tier_products,
       stripe_price_id: before.stripe_price_id,
       stripe_child_reduced_50_price_id: before.stripe_child_reduced_50_price_id,
     });
-    expect(stripe.products.get(before.stripe_product_id!)!.name).toBe("Hallenfußball Mixed · 01.06.2099");
+    expect(activeProductNames().every((name) => name.startsWith("Hallenfußball Mixed · 01.06.2099 – "))).toBe(true);
   });
 
-  it("legt bei geändertem Erwachsenenpreis nur die Erwachsenenstufen neu an und archiviert die alten", async () => {
+  it("legt bei geändertem Erwachsenenpreis nur an den Erwachsenenprodukten neue Preise an", async () => {
     const { id } = await create();
-    const before = { ...getLocalEventFull(id)! };
+    const before = { ...event(id) };
     stripe.client.prices.create.mockClear();
+    stripe.client.products.create.mockClear();
 
     expect((await update(id, { ...eventInput, price: "15,00 €", entry_price: 15 })).status).toBe("synced");
-    const after = getLocalEventFull(id)!;
+    const after = event(id);
 
+    expect(stripe.client.products.create).not.toHaveBeenCalled();
     expect(stripe.client.prices.create).toHaveBeenCalledTimes(3);
-    expect(activeAmounts(after.stripe_product_id!)).toEqual({
+    expect(after.stripe_tier_products).toEqual(before.stripe_tier_products);
+    expect(activeAmounts()).toEqual({
       adult: 1500, child: 600, adult_reduced_30: 1050, adult_reduced_50: 750, child_reduced_30: 420, child_reduced_50: 300,
     });
-    expect(after.stripe_product_id).toBe(before.stripe_product_id);
     expect(after.stripe_child_price_id).toBe(before.stripe_child_price_id);
     expect(after.stripe_price_id).not.toBe(before.stripe_price_id);
     expect(stripe.prices.find((p) => p.id === before.stripe_price_id)!.active).toBe(false);
@@ -185,88 +218,139 @@ describe("Stripe-Produkt beim Speichern eines Events", () => {
 
   it("reaktiviert alte Preise, wenn der frühere Betrag zurückkehrt", async () => {
     const { id } = await create();
-    const original = { ...getLocalEventFull(id)! };
+    const original = { ...event(id) };
     await update(id, { ...eventInput, price: "15,00 €", entry_price: 15 });
     stripe.client.prices.create.mockClear();
 
     expect((await update(id, eventInput)).status).toBe("synced");
     expect(stripe.client.prices.create).not.toHaveBeenCalled();
-    expect(getLocalEventFull(id)!.stripe_price_id).toBe(original.stripe_price_id);
+    expect(event(id).stripe_price_id).toBe(original.stripe_price_id);
     expect(stripe.prices.filter((p) => p.active)).toHaveLength(6);
   });
 
-  it("archiviert Produkt und Preise, wenn nichts mehr zu kassieren ist", async () => {
+  it("archiviert die Kinderprodukte, wenn der Kinderpreis entfällt, und holt sie zurück", async () => {
     const { id } = await create();
-    const productId = getLocalEventFull(id)!.stripe_product_id!;
+    const childProduct = products(id).child!;
+
+    expect((await update(id, { ...eventInput, child_entry_price: null })).status).toBe("synced");
+    expect(stripe.products.get(childProduct)!.active).toBe(false);
+    expect(stripe.prices.filter((p) => p.active && p.metadata.tier.startsWith("child"))).toHaveLength(0);
+    expect(event(id)).toMatchObject({ stripe_child_price_id: null, stripe_child_reduced_30_price_id: null });
+    expect(activeProductNames()).toEqual([
+      "Hallenfußball · 01.06.2099 – Eintritt",
+      "Hallenfußball · 01.06.2099 – Eintritt (30 % ermäßigt)",
+      "Hallenfußball · 01.06.2099 – Eintritt (50 % ermäßigt)",
+    ]);
+
+    // Wieder mit Kinderpreis: dieselben Produkte werden reaktiviert, keine neuen.
+    stripe.client.products.create.mockClear();
+    expect((await update(id, eventInput)).status).toBe("synced");
+    expect(stripe.client.products.create).not.toHaveBeenCalled();
+    expect(products(id).child).toBe(childProduct);
+    expect(stripe.products.get(childProduct)!.active).toBe(true);
+  });
+
+  it("archiviert alles, wenn nichts mehr zu kassieren ist, und reaktiviert dieselben Produkte", async () => {
+    const { id } = await create();
+    const tierProducts = { ...products(id) };
 
     const result = await update(id, { ...eventInput, price: "Spende willkommen", entry_price: null, child_entry_price: null });
     expect(result.status).toBe("archived");
     expect(stripe.prices.some((p) => p.active)).toBe(false);
-    expect(stripe.products.get(productId)!.active).toBe(false);
-    expect(getLocalEventFull(id)).toMatchObject({ stripe_product_id: productId, stripe_price_id: null, stripe_child_reduced_50_price_id: null });
+    expect([...stripe.products.values()].some((p) => p.active)).toBe(false);
+    expect(event(id)).toMatchObject({ stripe_tier_products: tierProducts, stripe_price_id: null, stripe_child_reduced_50_price_id: null });
 
-    // Wieder mit Preis: dasselbe Produkt wird reaktiviert.
     expect((await update(id, eventInput)).status).toBe("synced");
-    expect(stripe.products.size).toBe(1);
-    expect(stripe.products.get(productId)!.active).toBe(true);
+    expect(stripe.products.size).toBe(6);
+    expect(products(id)).toEqual(tierProducts);
   });
 
-  it("legt für ein kostenloses Event kein Produkt an", async () => {
+  it("legt für ein kostenloses Event keine Produkte an", async () => {
     const { id, stripe: result } = await create({ ...eventInput, price: "Kostenlos", entry_price: null, child_entry_price: null });
     expect(result.status).toBe("archived");
     expect(stripe.client.products.create).not.toHaveBeenCalled();
-    expect(getLocalEventFull(id)!.stripe_product_id ?? null).toBeNull();
+    expect(event(id).stripe_tier_products ?? null).toBeNull();
+  });
+
+  it("archiviert das frühere Einzelprodukt je Event und leert die Spalte", async () => {
+    // Stand vor dem Umbau: ein Produkt mit allen Preisen, keine Stufenprodukte.
+    const legacy = await stripe.client.products.create({ name: "Hallenfußball · 01.06.2099", metadata: { event_id: "1" } });
+    const oldPrice = await stripe.client.prices.create({
+      product: legacy.id, currency: "eur", unit_amount: 1200, nickname: "Erwachsene", metadata: { tier: "adult" },
+    });
+    resetLocalData([{
+      ...eventInput, id: 1, category: "fussball", parking_location: null, max_per_email: 5, status: "published",
+      cancellation_reason: null, published_at: null, created_at: "2026-11-01T10:00:00Z", current_participants: 0,
+      stripe_product_id: legacy.id, stripe_price_id: oldPrice.id,
+    }]);
+
+    expect((await update(1, eventInput)).status).toBe("synced");
+    expect(stripe.products.get(legacy.id)!.active).toBe(false);
+    expect(stripe.prices.filter((p) => p.product === legacy.id).every((p) => !p.active)).toBe(true);
+    expect(event(1).stripe_product_id).toBeNull();
+    expect(event(1).stripe_price_id).not.toBe(oldPrice.id);
+    expect(Object.keys(products(1))).toHaveLength(6);
   });
 
   it("speichert das Event auch, wenn Stripe scheitert, und versucht es beim nächsten Speichern erneut", async () => {
     stripe.client.prices.create.mockRejectedValueOnce(new Error("Stripe nicht erreichbar"));
     const { id, stripe: result } = await create();
     expect(result).toEqual({ status: "failed", error: "Stripe nicht erreichbar" });
-    expect(getLocalEventFull(id)).toMatchObject({ title: "Hallenfußball", entry_price: 12 });
-    expect(getLocalEventFull(id)!.stripe_price_id ?? null).toBeNull();
+    expect(event(id)).toMatchObject({ title: "Hallenfußball", entry_price: 12 });
+    expect(event(id).stripe_price_id ?? null).toBeNull();
 
     expect((await update(id, eventInput)).status).toBe("synced");
-    expect(getLocalEventFull(id)!.stripe_price_id).toMatch(/^price_/);
-    expect(stripe.products.size).toBe(1);
+    expect(event(id).stripe_price_id).toMatch(/^price_/);
+    // Die beim ersten Versuch angelegten Produkte werden über den Idempotency-Key wiederverwendet.
+    expect(stripe.products.size).toBe(6);
   });
 
   it("legt ein im Dashboard gelöschtes Produkt neu an", async () => {
     const { id } = await create();
-    const oldProduct = getLocalEventFull(id)!.stripe_product_id!;
-    stripe.products.delete(oldProduct);
+    const oldAdult = products(id).adult!;
+    stripe.products.delete(oldAdult);
 
     expect((await update(id, eventInput)).status).toBe("synced");
-    const newProduct = getLocalEventFull(id)!.stripe_product_id!;
-    expect(newProduct).not.toBe(oldProduct);
-    expect(activeAmounts(newProduct)).toMatchObject({ adult: 1200, child_reduced_50: 300 });
+    const newAdult = products(id).adult!;
+    expect(newAdult).not.toBe(oldAdult);
+    expect(stripe.prices.find((p) => p.product === newAdult && p.active)!.unit_amount).toBe(1200);
   });
 
   it("überspringt den Abgleich ohne Stripe-Schlüssel", async () => {
     stripeState.current = null;
     const { id, stripe: result } = await create();
     expect(result).toEqual({ status: "skipped" });
-    expect(getLocalEventFull(id)!.stripe_product_id ?? null).toBeNull();
+    expect(event(id).stripe_tier_products ?? null).toBeNull();
   });
 
-  it("liefert dem Formular den Link zum Produkt", async () => {
+  it("liefert dem Formular je Stufe einen Link zum Produkt", async () => {
     const { id } = await create();
     const response = await GET(new NextRequest("http://localhost/api/admin/events"), params(id));
     const body = await response.json();
-    expect(body.stripe_product_url).toBe(`https://dashboard.stripe.com/test/products/${body.stripe_product_id}`);
+    expect(Object.keys(body.stripe_product_urls).sort()).toEqual([...ALL_TIERS].sort());
+    expect(body.stripe_product_urls.adult).toBe(`https://dashboard.stripe.com/test/products/${body.stripe_tier_products.adult}`);
   });
 
-  it("archiviert das Produkt beim Löschen des Events", async () => {
-    const { id } = await create();
-    const productId = getLocalEventFull(id)!.stripe_product_id!;
+  it("archiviert beim Löschen des Events alle Produkte", async () => {
+    await create();
+    const { id } = await create({ ...eventInput, title: "Zweites Event" });
+    const second = Object.values(products(id));
     const response = await DELETE(new NextRequest("http://localhost/api/admin/events", { method: "DELETE" }), params(id));
     expect(response.status).toBe(200);
-    expect(stripe.products.get(productId)!.active).toBe(false);
-    expect(stripe.prices.some((p) => p.active)).toBe(false);
+    for (const productId of second) expect(stripe.products.get(productId!)!.active).toBe(false);
+    // Das andere Event bleibt unberührt.
+    expect([...stripe.products.values()].filter((p) => p.active)).toHaveLength(6);
   });
 });
 
 describe("productName", () => {
-  it("hängt das Datum deutsch formatiert an", () => {
+  it("hängt Datum und Stufe an", () => {
     expect(productName({ title: "Yoga", date: "2026-11-14" })).toBe("Yoga · 14.11.2026");
+    expect(productName({ title: "Yoga", date: "2026-11-14" }, "Kinder (50 % ermäßigt)")).toBe("Yoga · 14.11.2026 – Kinder (50 % ermäßigt)");
+  });
+
+  it("kürzt sehr lange Titel", () => {
+    const name = productName({ title: "x".repeat(300), date: "2026-11-14" }, "Eintritt");
+    expect(name).toBe(`${"x".repeat(199)}… · 14.11.2026 – Eintritt`);
   });
 });

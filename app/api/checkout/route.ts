@@ -3,13 +3,16 @@ import { getStripe } from "@/lib/stripe";
 import { checkRateLimit, getClientIp, RATE_LIMITS } from "@/lib/ratelimit";
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { calculateRegistrationPrice } from "@/lib/price";
+import { calculatePersonsPrice, TIER_PRICE_COLUMNS } from "@/lib/price-tiers";
 import { createPersonPrices, personPricesTotal } from "@/lib/payment-prices";
 import { randomUUID } from "node:crypto";
 import { CheckoutBlockedError, closePreviousCheckouts } from "@/lib/checkout-status";
 import { discoverRegistrationCheckouts, recoverCheckoutCreation } from "@/lib/checkout-creation";
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+
+const DISCOUNT_PENDING_MESSAGE =
+  "Deine Ermäßigung wird noch geprüft. Bezahlen kannst du, sobald sie entschieden ist – du bekommst eine E-Mail.";
 
 /**
  * Startet eine Stripe-Zahlung für eine bestehende Anmeldung.
@@ -65,7 +68,11 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
-    let pricing = calculateRegistrationPrice(info, info.person_count, info.child_count);
+    // Erst nach der Prüfung steht fest, welcher Preis gilt.
+    if ((info.pending_discount_requests ?? 0) > 0) {
+      return NextResponse.json({ error: DISCOUNT_PENDING_MESSAGE, payment_state: "open" }, { status: 409 });
+    }
+    let pricing = calculatePersonsPrice(info, info.persons);
     if (!pricing || pricing.totalCents === 0) {
       return NextResponse.json(
         { error: "Für diese Anmeldung ist keine Zahlung erforderlich. Die Bestätigung erfolgt durch das Team." },
@@ -96,31 +103,31 @@ export async function POST(request: NextRequest) {
       throw new CheckoutBlockedError("Diese Anmeldung kann derzeit nicht bezahlt werden.", "open");
     }
     if (info.paid_at) throw new CheckoutBlockedError("Diese Anmeldung wurde bereits bezahlt.", "paid");
-    pricing = calculateRegistrationPrice(info, info.person_count, info.child_count);
+    if ((info.pending_discount_requests ?? 0) > 0) throw new CheckoutBlockedError(DISCOUNT_PENDING_MESSAGE, "open");
+    pricing = calculatePersonsPrice(info, info.persons);
     if (!pricing || pricing.totalCents === 0) {
       throw new CheckoutBlockedError("Für diese Anmeldung ist keine Zahlung erforderlich. Die Bestätigung erfolgt durch das Team.", "open");
     }
 
-    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
-    const addItem = (quantity: number, unitAmount: number, priceId: string | null, label: string) => {
-      if (quantity === 0) return;
-      lineItems.push(priceId ? { price: priceId, quantity } : {
+    // Eine Zeile je Preisstufe. Mit Stripe Price ID, wenn der Abgleich eine
+    // zum aktuellen Betrag hinterlegt hat (siehe lib/stripe-catalog.ts) –
+    // sonst mit dem Betrag selbst. Die Summenprüfung unten fängt beides ab.
+    const checkoutInfo = info;
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = pricing.groups.map(
+      ({ tier, count, unitCents, lineLabel }) => {
+        const priceId = checkoutInfo[TIER_PRICE_COLUMNS[tier]] ?? null;
+        return priceId ? { price: priceId, quantity: count } : {
           price_data: {
             currency: "eur",
-            unit_amount: unitAmount,
-            product_data: { name: `${info.event_title} – ${label}` },
+            unit_amount: unitCents,
+            product_data: { name: `${checkoutInfo.event_title} – ${lineLabel}` },
           },
-          quantity,
-        });
-    };
-    if (info.child_entry_price == null) {
-      addItem(info.person_count, pricing.adultUnitCents, info.stripe_price_id, "Eintritt");
-    } else {
-      addItem(pricing.adultCount, pricing.adultUnitCents, info.stripe_price_id, "Erwachsene");
-      addItem(pricing.childCount, pricing.childUnitCents, info.stripe_child_price_id, "Kinder");
-    }
+          quantity: count,
+        };
+      }
+    );
 
-    const personPrices = createPersonPrices(info.persons, pricing.adultUnitCents, pricing.childUnitCents);
+    const personPrices = createPersonPrices(info.persons, pricing.centsFor);
     if (info.persons.length !== info.person_count || personPricesTotal(personPrices) !== pricing.totalCents) {
       throw new Error("Personen und Checkout-Summe stimmen nicht überein.");
     }

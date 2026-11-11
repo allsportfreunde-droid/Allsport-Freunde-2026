@@ -142,7 +142,7 @@ export async function getRegistrationByToken(token: string, transaction?: Regist
 
   const reg = rows[0] as RegistrationStatusInfo;
   const persons = await sql`
-    SELECT id, registration_id, first_name, last_name, is_child, checked_in_at, cancelled_at, created_at
+    SELECT id, registration_id, first_name, last_name, is_child, discount, checked_in_at, cancelled_at, created_at
     FROM registration_persons
     WHERE registration_id = ${reg.id}
     ORDER BY created_at ASC
@@ -305,6 +305,7 @@ export async function getEventPersons(eventId: number): Promise<EventPerson[]> {
       rp.first_name,
       rp.last_name,
       rp.is_child,
+      rp.discount,
       rp.checked_in_at,
       rp.cancelled_at,
       rp.created_at,
@@ -503,7 +504,7 @@ export async function getRegistrationDetail(id: number): Promise<RegistrationDet
 
   const detail = rows[0] as RegistrationDetail;
   const persons = await sql`
-    SELECT id, registration_id, first_name, last_name, is_child, checked_in_at, cancelled_at, created_at
+    SELECT id, registration_id, first_name, last_name, is_child, discount, checked_in_at, cancelled_at, created_at
     FROM registration_persons
     WHERE registration_id = ${id} AND cancelled_at IS NULL
     ORDER BY created_at ASC
@@ -784,11 +785,16 @@ export async function getCheckoutInfo(token: string): Promise<CheckoutInfo | nul
       e.id AS event_id, e.title AS event_title, TO_CHAR(e.date, 'YYYY-MM-DD') AS event_date,
       e.price, e.entry_price::float8 AS entry_price, e.stripe_price_id,
       e.child_entry_price::float8 AS child_entry_price, e.stripe_child_price_id,
+      e.stripe_adult_reduced_30_price_id, e.stripe_adult_reduced_50_price_id,
+      e.stripe_child_reduced_30_price_id, e.stripe_child_reduced_50_price_id,
+      (SELECT COUNT(*)::int FROM discount_requests dr
+        JOIN registration_persons rp ON rp.id = dr.person_id
+        WHERE dr.registration_id = r.id AND dr.status = 'pending' AND rp.cancelled_at IS NULL) AS pending_discount_requests,
       (SELECT COUNT(*)::int FROM registration_persons rp
         WHERE rp.registration_id = r.id AND rp.cancelled_at IS NULL) AS person_count,
       (SELECT COUNT(*)::int FROM registration_persons rp
         WHERE rp.registration_id = r.id AND rp.cancelled_at IS NULL AND rp.is_child) AS child_count,
-      COALESCE((SELECT jsonb_agg(jsonb_build_object('id', rp.id::text, 'is_child', rp.is_child) ORDER BY rp.created_at, rp.id)
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('id', rp.id::text, 'is_child', rp.is_child, 'discount', rp.discount) ORDER BY rp.created_at, rp.id)
         FROM registration_persons rp WHERE rp.registration_id = r.id AND rp.cancelled_at IS NULL), '[]'::jsonb) AS persons
     FROM registrations r
     JOIN events e ON r.event_id = e.id

@@ -4,11 +4,16 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import StatusBadge from "./StatusBadge";
 import ChildBadge from "@/components/ChildBadge";
+import DiscountBadge from "@/components/DiscountBadge";
+import PriceSummary from "@/components/PriceSummary";
+import ProofUpload from "@/components/registration/ProofUpload";
+import { discountRequestLabel, type DiscountRequestInfo } from "@/lib/discount-requests";
 import { Calendar, Clock, MapPin, Euro, Shirt, Mail, Users, X, CheckCircle2, Loader2 } from "lucide-react";
 import type { RegistrationStatusInfo, RegistrationPerson, RegistrationStatus } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { formatEuro } from "@/lib/finance";
-import { calculateRegistrationPrice, formatEventPrice } from "@/lib/price";
+import { formatEventPrice } from "@/lib/price";
+import { calculatePersonsPrice } from "@/lib/price-tiers";
 import {
   canCancelRegistration,
   cancellationBlockedReason,
@@ -51,9 +56,14 @@ interface PersonRowProps {
   /** false = Stornofrist vorbei oder Veranstaltung schon begonnen */
   cancellationOpen: boolean;
   onCancelled: (personId: string, allCancelled: boolean) => void;
+  /** Ermäßigungsantrag dieser Person, falls gestellt. */
+  discountRequest?: DiscountRequestInfo;
+  onProofUploaded: (requestId: number) => void;
 }
 
-function PersonRow({ person, index, token, registrationStatus, cancellationOpen, onCancelled }: PersonRowProps) {
+function PersonRow({
+  person, index, token, registrationStatus, cancellationOpen, onCancelled, discountRequest, onProofUploaded,
+}: PersonRowProps) {
   const [cancelling, setCancelling] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +110,7 @@ function PersonRow({ person, index, token, registrationStatus, cancellationOpen,
             <p className={`text-sm font-medium ${isCancelled ? "line-through text-gray-400" : "text-gray-900"}`}>
               {person.first_name} {person.last_name}
               {person.is_child && <ChildBadge className="ml-1.5 align-middle" />}
+              {person.discount && <DiscountBadge discount={person.discount} className="ml-1.5 align-middle" />}
               {index === 0 && <span className="ml-1.5 text-xs text-gray-400 font-normal">(du)</span>}
             </p>
             {person.checked_in_at && (
@@ -112,6 +123,30 @@ function PersonRow({ person, index, token, registrationStatus, cancellationOpen,
               <p className="text-xs text-gray-400 mt-0.5">
                 Storniert {formatDateTime(person.cancelled_at!)}
               </p>
+            )}
+            {discountRequest && !isCancelled && (
+              <div className="mt-1 space-y-1">
+                <p
+                  className={`text-xs ${
+                    discountRequest.status === "approved"
+                      ? "text-green-700"
+                      : discountRequest.status === "rejected" ? "text-gray-500" : "text-amber-700"
+                  }`}
+                >
+                  {discountRequestLabel(discountRequest)}
+                </p>
+                {discountRequest.status === "rejected" && discountRequest.decision_note && (
+                  <p className="text-xs text-gray-500">Hinweis vom Team: {discountRequest.decision_note}</p>
+                )}
+                {discountRequest.status === "pending" && (
+                  <ProofUpload
+                    statusToken={token}
+                    requestId={discountRequest.id}
+                    hasProof={discountRequest.has_proof}
+                    onUploaded={() => onProofUploaded(discountRequest.id)}
+                  />
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -184,6 +219,10 @@ export default function StatusPage({
   const activePersons = persons.filter((p) => !p.cancelled_at);
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
+  const [discountRequests, setDiscountRequests] = useState<DiscountRequestInfo[]>(info.discount_requests ?? []);
+  const requestFor = (personId: string) => discountRequests.find((r) => r.person_id === personId);
+  // Offen = noch nicht entschieden; solange gibt es kein Bezahlen (der Checkout sperrt ebenso).
+  const pendingRequests = activePersons.filter((p) => requestFor(p.id)?.status === "pending");
 
   const eventPricing = {
     price: info.event_price,
@@ -191,20 +230,29 @@ export default function StatusPage({
     child_entry_price: info.event_child_entry_price,
     child_price: info.event_child_price,
   };
-  const pricing = calculateRegistrationPrice(eventPricing, activePersons.length, activePersons.filter((p) => p.is_child).length);
+  // Beantragte Ermäßigungen schon einrechnen – vorbehaltlich der Prüfung.
+  const pricing = calculatePersonsPrice(
+    eventPricing,
+    activePersons.map((p) => {
+      const request = requestFor(p.id);
+      return { ...p, discount: p.discount ?? (request?.status === "pending" ? request.discount : null) };
+    })
+  );
   const totalPrice = pricing ? pricing.totalCents / 100 : null;
   const isPaid = info.paid_at != null;
   // Tatsächlicher Zahlungsstand aus der Datenbank – nicht aus dem URL-Parameter.
   const paymentState = info.payment_state ?? (isPaid ? "paid" : "open");
   const paymentReceived = paymentState === "paid";
   const paymentPending = paymentState === "processing" || paymentState === "checking";
-  const canPay =
+  const payable =
     totalPrice != null &&
     totalPrice > 0 &&
     !paymentReceived &&
     !paymentPending &&
     !info.is_waitlist &&
     (status === "pending" || status === "approved");
+  const awaitingDiscountDecision = payable && pendingRequests.length > 0;
+  const canPay = payable && !awaitingDiscountDecision;
 
   async function handlePay() {
     setPayLoading(true);
@@ -468,6 +516,10 @@ export default function StatusPage({
                   registrationStatus={status}
                   cancellationOpen={cancellationOpen}
                   onCancelled={handlePersonCancelled}
+                  discountRequest={requestFor(person.id)}
+                  onProofUploaded={(requestId) =>
+                    setDiscountRequests((prev) => prev.map((r) => (r.id === requestId ? { ...r, has_proof: true } : r)))
+                  }
                 />
               ))}
 
@@ -537,13 +589,23 @@ export default function StatusPage({
           </Card>
         )}
 
-        {(canPay || paymentReceived || paymentPending) && (
+        {(canPay || awaitingDiscountDecision || paymentReceived || paymentPending) && (
           <Card>
             <CardHeader>
               <CardTitle className="text-lg">Zahlung</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {paymentReceived ? (
+              {awaitingDiscountDecision ? (
+                <div className="space-y-3">
+                  <div className="text-sm text-amber-800 bg-amber-50 rounded-lg p-3">
+                    Bezahlen kannst du, sobald wir deine Ermäßigung geprüft haben – du bekommst eine E-Mail.
+                    {pendingRequests.some((p) => !requestFor(p.id)?.has_proof) && (
+                      <> Bitte lade dafür noch den fehlenden Nachweis oben bei der Person hoch.</>
+                    )}
+                  </div>
+                  {pricing && <PriceSummary pricing={pricing} note="Ermäßigung vorbehaltlich der Prüfung" />}
+                </div>
+              ) : paymentReceived ? (
                 <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 rounded-lg p-3">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
                   <span>
@@ -573,15 +635,7 @@ export default function StatusPage({
                   {status === "approved" && <p>Deine Teilnahme bleibt bestätigt.</p>}
                 </div>
               )}
-              <div className="flex items-center justify-between gap-3">
-                <span className="flex items-center gap-2 text-sm text-gray-600">
-                  <Euro className="w-4 h-4 text-gray-400" />
-                  {pricing?.breakdown}
-                </span>
-                <span className="text-base font-semibold text-gray-900">
-                  {formatEuro(totalPrice!)}
-                </span>
-              </div>
+              {pricing && <PriceSummary pricing={pricing} />}
               <Button onClick={handlePay} disabled={payLoading} className="w-full">
                 {payLoading ? (
                   <>

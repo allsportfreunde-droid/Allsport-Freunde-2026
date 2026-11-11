@@ -29,7 +29,7 @@ import {
   priceFromAmount,
   type PriceFields,
 } from "@/lib/price";
-import { calculateTierPrices, DISCOUNTS, PRICE_TIERS, TIER_PRICE_COLUMNS } from "@/lib/price-tiers";
+import { activeTiers, calculateTierPrices, DISCOUNTS, TIER_PRICE_COLUMNS, type PriceTier } from "@/lib/price-tiers";
 
 interface EventFormProps {
   event?: EventWithRegistrations;
@@ -84,10 +84,12 @@ function derivePriceState(
   return { mode: "text", cents: centsFromAmount(amount), text };
 }
 
-/** Sind alle sechs Price IDs des gespeicherten Events vorhanden? */
+/** Hat das gespeicherte Event für jede benötigte Stufe ein Stripe-Produkt mit Preis? */
 function hasCompleteStripeCatalog(event?: EventWithRegistrations): boolean {
-  return !!event?.stripe_product_id &&
-    PRICE_TIERS.every(({ tier }) => !!event[TIER_PRICE_COLUMNS[tier]]);
+  if (!event) return false;
+  return activeTiers(event).every(
+    (tier) => !!event.stripe_tier_products?.[tier] && !!event[TIER_PRICE_COLUMNS[tier]]
+  );
 }
 
 /** Baut die beiden DB-Felder aus dem aktuellen Eingabezustand. */
@@ -141,7 +143,31 @@ export default function EventForm({ event }: EventFormProps) {
   // Dieselbe Rechnung, mit der der Server die Stripe-Preise anlegt.
   const tierPrices = calculateTierPrices({ ...priceFields, child_entry_price: childEntryPrice });
   const savedTierPrices = event ? calculateTierPrices(event) : null;
-  const tierPricesChanged = JSON.stringify(tierPrices) !== JSON.stringify(savedTierPrices);
+  const separateChildPrice = childEntryPrice != null;
+  // Abgeglichen ist nur, was gespeichert ist: andere Beträge oder ein hinzugekommener
+  // bzw. entfallener Kinderpreis brauchen erst einen neuen Abgleich.
+  const stripeCatalogCurrent =
+    hasCompleteStripeCatalog(event) &&
+    JSON.stringify(tierPrices) === JSON.stringify(savedTierPrices) &&
+    (event?.child_entry_price != null) === separateChildPrice;
+  const hasStripeProducts =
+    !!event?.stripe_product_id || Object.keys(event?.stripe_tier_products ?? {}).length > 0;
+  /** Betrag einer Stufe – verlinkt auf ihr Stripe-Produkt, solange der Abgleich aktuell ist. */
+  const tierPriceCell = (tier: PriceTier) => {
+    const amount = tierPrices ? formatEuro(tierPrices[tier] / 100) : "";
+    const url = stripeCatalogCurrent ? event?.stripe_product_urls?.[tier] : undefined;
+    return url ? (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Produkt im Stripe-Dashboard öffnen"
+        className="underline decoration-dotted underline-offset-2 hover:text-green-700"
+      >
+        {amount}
+      </a>
+    ) : amount;
+  };
 
   // ── Costs state (edit mode only, deferred save) ───────
   interface LocalCost { _key: string; id?: number; description: string; amount: number; }
@@ -691,12 +717,15 @@ export default function EventForm({ event }: EventFormProps) {
                           </tr>
                         </thead>
                         <tbody>
-                          {([["adult", "Erwachsene"], ["child", "Kind"]] as const).map(([base, label]) => (
+                          {(separateChildPrice
+                            ? ([["adult", "Erwachsene"], ["child", "Kind"]] as const)
+                            : ([["adult", "Eintritt"]] as const)
+                          ).map(([base, label]) => (
                             <tr key={base} className="border-t">
                               <td className="py-1 pr-3">{label}</td>
-                              <td className="py-1 pr-3 text-right tabular-nums">{formatEuro(tierPrices[base] / 100)}</td>
-                              <td className="py-1 pr-3 text-right tabular-nums">{formatEuro(tierPrices[`${base}_reduced_30`] / 100)}</td>
-                              <td className="py-1 text-right tabular-nums">{formatEuro(tierPrices[`${base}_reduced_50`] / 100)}</td>
+                              <td className="py-1 pr-3 text-right tabular-nums">{tierPriceCell(base)}</td>
+                              <td className="py-1 pr-3 text-right tabular-nums">{tierPriceCell(`${base}_reduced_30`)}</td>
+                              <td className="py-1 text-right tabular-nums">{tierPriceCell(`${base}_reduced_50`)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -707,22 +736,16 @@ export default function EventForm({ event }: EventFormProps) {
                       −{DISCOUNTS.reduced_50.percent} %: {DISCOUNTS.reduced_50.reason}
                     </p>
                     <p className="text-xs" aria-live="polite">
-                      {hasCompleteStripeCatalog(event) && !tierPricesChanged ? (
+                      {stripeCatalogCurrent ? (
                         <span className="inline-flex items-center gap-1 text-green-700">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          In Stripe angelegt
-                          {event?.stripe_product_url && (
-                            <>
-                              {" · "}
-                              <a href={event.stripe_product_url} target="_blank" rel="noopener noreferrer" className="underline">
-                                Produkt im Stripe-Dashboard
-                              </a>
-                            </>
-                          )}
+                          In Stripe angelegt – ein Klick auf einen Betrag öffnet sein Produkt.
                         </span>
                       ) : (
                         <span className="text-muted-foreground">
-                          Beim Speichern werden diese sechs Preise als Produkt in Stripe {event?.stripe_product_id ? "aktualisiert" : "angelegt"}.
+                          {hasStripeProducts
+                            ? `Beim Speichern werden die ${separateChildPrice ? "sechs" : "drei"} Stripe-Produkte aktualisiert – eines je Preis.`
+                            : `Beim Speichern entstehen in Stripe ${separateChildPrice ? "sechs" : "drei"} Produkte – eines je Preis.`}
                         </span>
                       )}
                     </p>
@@ -730,7 +753,7 @@ export default function EventForm({ event }: EventFormProps) {
                 ) : (
                   <p className="text-xs text-muted-foreground">
                     Kein verbindlicher Preis – es wird kein Stripe-Produkt angelegt
-                    {event?.stripe_product_id ? ", bestehende Stripe-Preise werden beim Speichern archiviert" : ""}.
+                    {hasStripeProducts ? ", bestehende Stripe-Produkte werden beim Speichern archiviert" : ""}.
                   </p>
                 )}
               </div>

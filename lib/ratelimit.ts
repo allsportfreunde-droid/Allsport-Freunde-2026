@@ -42,4 +42,9 @@ export const RATE_LIMITS = {
   checkoutStatus: { limit: 120, windowMs: 60 * 1000 },
   // Öffentliche Review-Links: Laden und Speichern teilen sich dieses Limit.
   review: { limit: 60, windowMs: 10 * 60 * 1000 },
+  // Ermäßigungsvorschau im Anmeldeformular. Das Formular fragt erst nach einer
+  // Tipp-Pause und je Person nur einmal – mehr braucht auch eine Familie nicht.
+  discountCheck: { limit: 30, windowMs: 10 * 60 * 1000 },
+  // Nachweis-Uploads: je Person einer, dazu Raum für Korrekturen.
+  discountProof: { limit: 10, windowMs: 10 * 60 * 1000 },
 } as const;

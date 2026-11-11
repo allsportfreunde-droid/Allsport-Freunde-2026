@@ -21,6 +21,7 @@ import {
   ChevronRight,
   UserCheck,
   Star,
+  BadgePercent,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -46,6 +47,7 @@ const navSections = [
       { href: "/admin/finanzen", label: "Finanzen", icon: BarChart3 },
       { href: "/admin/contact", label: "Anfragen", icon: MessageSquare },
       { href: "/admin/helfer", label: "Helfer", icon: UserCheck },
+      { href: "/admin/ermaessigungen", label: "Ermäßigungen", icon: BadgePercent },
     ],
   },
 ];

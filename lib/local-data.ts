@@ -417,9 +417,13 @@ export function getLocalCheckoutInfo(token: string): CheckoutInfo | null {
     child_entry_price: event.child_entry_price ?? null,
     stripe_child_price_id: event.stripe_child_price_id ?? null,
     stripe_price_id: event.stripe_price_id ?? null,
+    stripe_adult_reduced_30_price_id: event.stripe_adult_reduced_30_price_id ?? null,
+    stripe_adult_reduced_50_price_id: event.stripe_adult_reduced_50_price_id ?? null,
+    stripe_child_reduced_30_price_id: event.stripe_child_reduced_30_price_id ?? null,
+    stripe_child_reduced_50_price_id: event.stripe_child_reduced_50_price_id ?? null,
     person_count: persons.length,
     child_count: persons.filter((p) => p.is_child).length,
-    persons: persons.map(({ id, is_child }) => ({ id, is_child })),
+    persons: persons.map(({ id, is_child, discount }) => ({ id, is_child, discount: discount ?? null })),
   };
 }
 
@@ -558,7 +562,7 @@ export function updateLocalEvent(id: number, data: EventCreateInput): void {
   }
 }
 
-const emptyLocalPriceIds: Omit<EventStripeCatalog, "stripe_product_id"> = {
+const emptyLocalPriceIds: Omit<EventStripeCatalog, "stripe_tier_products"> = {
   stripe_price_id: null,
   stripe_child_price_id: null,
   stripe_adult_reduced_30_price_id: null,
@@ -576,7 +580,8 @@ function hasLocalPriceBasis(event: EventWithRegistrations, basis: EventPriceBasi
 export function saveLocalEventStripeCatalog(id: number, catalog: EventStripeCatalog, basis: EventPriceBasis): boolean {
   const event = localEvents.find((e) => e.id === id);
   if (!event || !hasLocalPriceBasis(event, basis)) return false;
-  Object.assign(event, catalog);
+  // Wie in Postgres: Das frühere Einzelprodukt ist nach dem Abgleich archiviert.
+  Object.assign(event, catalog, { stripe_product_id: null });
   return true;
 }
 

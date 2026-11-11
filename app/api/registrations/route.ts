@@ -2,6 +2,7 @@ import {
   getEvent,
   getRegistrationCount,
   findRegistration,
+  getRecognizableDiscounts,
 } from "@/lib/db";
 import { getSQL } from "@/lib/db/utils";
 import {
@@ -13,7 +14,10 @@ import { NextRequest, NextResponse } from "next/server";
 import type { RegistrationRequest } from "@/lib/types";
 import { checkRateLimit, getClientIp, RATE_LIMITS } from "@/lib/ratelimit";
 import { honeypotFailure } from "@/lib/honeypot";
-import { formatPriceLabel } from "@/lib/price";
+import { formatPersonsPriceLabel } from "@/lib/price-tiers";
+import { matchDiscount } from "@/lib/discount-holders";
+import { parseDiscountRequest } from "@/lib/discount-requests";
+import { berlinToday } from "@/lib/review";
 import { cancellationDeadline, formatDeadline } from "@/lib/cancellation";
 
 export async function POST(request: NextRequest) {
@@ -137,6 +141,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Ermäßigung je Person – ausschließlich serverseitig aus der Liste, nie
+    // aus dem Formular. Scheitert der Abgleich, wird trotzdem angemeldet:
+    // dann zum vollen Preis, das Team kann erstatten.
+    let recognized: Awaited<ReturnType<typeof getRecognizableDiscounts>> = [];
+    try {
+      recognized = await getRecognizableDiscounts(normalizedEmail, berlinToday());
+    } catch (error) {
+      console.error("Ermäßigungsabgleich fehlgeschlagen – Anmeldung ohne Ermäßigung:", error);
+    }
+    const registeredPersons = persons.map((p) => ({
+      firstName: p.firstName.trim(),
+      lastName: p.lastName.trim(),
+      // isChild kommt aus dem Toggle im Formular. Alles außer einem
+      // ausdrücklichen true gilt als Erwachsener – so wie der Default "Nein".
+      is_child: p.isChild === true,
+      discount: matchDiscount(recognized, p.firstName, p.lastName),
+    }));
+
+    // Ermäßigungsanträge: nur für Personen, die nicht schon erkannt wurden.
+    // Die Ermäßigung gilt erst nach der Prüfung (lib/db/discount-requests.ts) –
+    // bis dahin bleibt `discount` leer und das Bezahlen gesperrt.
+    const discountRequests = persons.map((p, index) =>
+      registeredPersons[index].discount ? null : parseDiscountRequest(p.discountRequest)
+    );
+    if (discountRequests.some(Boolean) && body.discountConsent !== true) {
+      return NextResponse.json(
+        { error: "Bitte willige ausdrücklich in die Speicherung des Nachweises ein, um eine Ermäßigung zu beantragen." },
+        { status: 400 }
+      );
+    }
+
     const sql = getSQL();
     const statusToken = randomUUID();
     let registrationId: number;
@@ -152,14 +187,27 @@ export async function POST(request: NextRequest) {
     `;
     registrationId = (rows[0] as { id: number }).id;
 
-    for (const p of persons) {
-      // isChild kommt aus dem Toggle im Formular. Alles außer einem
-      // ausdrücklichen true gilt als Erwachsener – so wie der Default "Nein".
-      await sql`
-        INSERT INTO registration_persons (registration_id, first_name, last_name, is_child)
-        VALUES (${registrationId}, ${p.firstName.trim()}, ${p.lastName.trim()}, ${p.isChild === true})
+    const createdRequests: Array<{ person_index: number; id: number }> = [];
+    for (const [index, p] of registeredPersons.entries()) {
+      const personRows = await sql`
+        INSERT INTO registration_persons (registration_id, first_name, last_name, is_child, discount)
+        VALUES (${registrationId}, ${p.firstName}, ${p.lastName}, ${p.is_child}, ${p.discount})
+        RETURNING id::text AS id
       `;
+      const request = discountRequests[index];
+      if (!request) continue;
+      const requestRows = await sql`
+        INSERT INTO discount_requests (person_id, registration_id, discount, remember, consented_at)
+        VALUES (${(personRows[0] as { id: string }).id}::uuid, ${registrationId}, ${request.discount}, ${request.remember}, NOW())
+        RETURNING id
+      `;
+      createdRequests.push({ person_index: index, id: (requestRows[0] as { id: number }).id });
     }
+    // Für Preisvorschau und Mail: beantragte Ermäßigungen schon einrechnen – vorbehaltlich der Prüfung.
+    const previewPersons = registeredPersons.map((p, index) => ({
+      ...p,
+      discount: p.discount ?? discountRequests[index]?.discount ?? null,
+    }));
 
     const emailData = {
       to: normalizedEmail,
@@ -183,11 +231,12 @@ export async function POST(request: NextRequest) {
         event_time: event.time,
         cancellation_deadline: event.cancellation_deadline,
       });
+      const priceLabel = formatPersonsPriceLabel(event, previewPersons);
       sendRegistrationReceivedEmail({
         ...emailData,
-        priceLabel:
-          formatPriceLabel(event.entry_price, persons.length, event.price, event.child_entry_price, persons.filter((p) => p.isChild === true).length) ??
-          undefined,
+        priceLabel: priceLabel
+          ? createdRequests.length > 0 ? `${priceLabel} (vorbehaltlich der Prüfung deiner Ermäßigung)` : priceLabel
+          : undefined,
         cancellationLabel: deadline ? formatDeadline(deadline) : undefined,
       });
     }
@@ -197,6 +246,8 @@ export async function POST(request: NextRequest) {
         message: "Anmeldung erfolgreich!",
         event_title: event.title,
         status_token: statusToken,
+        // Damit das Formular die Nachweise den richtigen Anträgen zuordnet.
+        discount_requests: createdRequests,
       },
       { status: 201 }
     );

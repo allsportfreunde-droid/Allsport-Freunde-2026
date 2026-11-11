@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { personRevenueCents } from "../lib/finance";
+import { personRevenueSql } from "../lib/db/person-revenue";
+import { DISCOUNTS } from "../lib/discounts";
 import { createLocalEvent, createLocalWalkInRegistration, getLocalCheckinEvents, getLocalRegistrationByToken, resetLocalData } from "../lib/local-data";
 
 describe("Umsatz je Person", () => {
@@ -43,5 +45,23 @@ describe("Umsatz je Person", () => {
     expect(getLocalCheckinEvents().upcoming[0]).toMatchObject({
       approved_count: 2, checked_in_count: 1, expected_revenue: 14, actual_revenue: 4,
     });
+  });
+});
+
+describe("Umsatz je Person mit Ermäßigung", () => {
+  it("zieht die Ermäßigung wie im Checkout ab", () => {
+    const event = { entry_price: 7.25, child_entry_price: 4 };
+    expect(personRevenueCents(event, { id: "a", is_child: false, discount: "reduced_50" })).toBe(363);
+    expect(personRevenueCents(event, { id: "b", is_child: false, discount: "reduced_30" })).toBe(508);
+    expect(personRevenueCents(event, { id: "c", is_child: true, discount: "reduced_50" })).toBe(200);
+    // Ein gespeicherter Zahlungsanteil hat weiter Vorrang.
+    expect(personRevenueCents(event, { id: "a", is_child: false, discount: "reduced_50" }, { a: 725 })).toBe(725);
+  });
+
+  it("verwendet in SQL dieselben Faktoren wie DISCOUNTS", () => {
+    const text = personRevenueSql(((strings: TemplateStringsArray) => strings.join("")) as unknown as Parameters<typeof personRevenueSql>[0]) as unknown as string;
+    for (const [key, { percent }] of Object.entries(DISCOUNTS)) {
+      expect(text).toContain(`WHEN '${key}' THEN ${100 - percent}`);
+    }
   });
 });

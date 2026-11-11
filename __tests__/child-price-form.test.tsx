@@ -61,18 +61,37 @@ describe("Preisübersicht mit Ermäßigungen", () => {
   it("zeigt die sechs berechneten Preise", () => {
     const html = renderForm({ price: "12,00 €", entry_price: 12, child_entry_price: 6 });
     for (const amount of ["12,00", "8,40", "6,00", "4,20", "3,00"]) expect(html).toContain(amount);
-    expect(html).toContain("Beim Speichern werden diese sechs Preise als Produkt in Stripe angelegt.");
+    expect(html).toContain(">Kind<");
+    expect(html).toContain("Beim Speichern entstehen in Stripe sechs Produkte – eines je Preis.");
   });
 
-  it("meldet ein vollständig angelegtes Produkt mit Link", () => {
+  it("zeigt ohne Kinderpreis nur die Eintrittszeile und drei Produkte", () => {
+    const html = renderForm({ price: "10,00 €", entry_price: 10, child_entry_price: null });
+    expect(html).toContain(">Eintritt<");
+    expect(html).not.toContain(">Kind<");
+    expect(html).toContain("Beim Speichern entstehen in Stripe drei Produkte – eines je Preis.");
+  });
+
+  it("verlinkt bei aktuellem Abgleich jeden Betrag auf sein Produkt", () => {
+    const tiers = ["adult", "adult_reduced_30", "adult_reduced_50"] as const;
     const html = renderForm({
-      stripe_product_id: "prod_1", stripe_product_url: "https://dashboard.stripe.com/test/products/prod_1",
-      stripe_price_id: "price_a", stripe_child_price_id: "price_c",
-      stripe_adult_reduced_30_price_id: "price_a30", stripe_adult_reduced_50_price_id: "price_a50",
-      stripe_child_reduced_30_price_id: "price_c30", stripe_child_reduced_50_price_id: "price_c50",
+      stripe_tier_products: { adult: "prod_a", adult_reduced_30: "prod_a30", adult_reduced_50: "prod_a50" },
+      stripe_product_urls: Object.fromEntries(tiers.map((t) => [t, `https://dashboard.stripe.com/test/products/${t}`])),
+      stripe_price_id: "price_a", stripe_adult_reduced_30_price_id: "price_a30", stripe_adult_reduced_50_price_id: "price_a50",
     });
     expect(html).toContain("In Stripe angelegt");
-    expect(html).toContain('href="https://dashboard.stripe.com/test/products/prod_1"');
+    for (const tier of tiers) expect(html).toContain(`href="https://dashboard.stripe.com/test/products/${tier}"`);
+  });
+
+  it("verlinkt nicht, solange ein Produkt fehlt", () => {
+    const html = renderForm({
+      stripe_tier_products: { adult: "prod_a" },
+      stripe_product_urls: { adult: "https://dashboard.stripe.com/test/products/prod_a" },
+      stripe_price_id: "price_a",
+    });
+    expect(html).not.toContain("In Stripe angelegt");
+    expect(html).not.toContain("dashboard.stripe.com");
+    expect(html).toContain("Beim Speichern werden die drei Stripe-Produkte aktualisiert – eines je Preis.");
   });
 
   it("legt bei Freitext kein Produkt an", () => {

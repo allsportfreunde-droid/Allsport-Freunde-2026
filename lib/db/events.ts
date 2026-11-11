@@ -112,7 +112,7 @@ export async function getEventFull(id: number): Promise<EventWithRegistrations |
   const rows = await sql`
     SELECT
       e.id, e.title, e.category, e.description, TO_CHAR(e.date, 'YYYY-MM-DD') AS date, e.time::text AS time, e.location, e.parking_location, e.price, e.entry_price::float8 AS entry_price, e.stripe_price_id, e.child_entry_price::float8 AS child_entry_price, e.child_price, e.stripe_child_price_id, e.dress_code, e.max_participants, e.max_per_email, e.status, e.cancellation_reason, e.published_at, e.created_at, TO_CHAR(e.cancellation_deadline, 'YYYY-MM-DD"T"HH24:MI') AS cancellation_deadline,
-      e.stripe_product_id, e.stripe_adult_reduced_30_price_id, e.stripe_adult_reduced_50_price_id, e.stripe_child_reduced_30_price_id, e.stripe_child_reduced_50_price_id,
+      e.stripe_product_id, e.stripe_tier_products, e.stripe_adult_reduced_30_price_id, e.stripe_adult_reduced_50_price_id, e.stripe_child_reduced_30_price_id, e.stripe_child_reduced_50_price_id,
       COUNT(CASE WHEN r.status = 'approved' THEN rp.id ELSE NULL END)::int AS current_participants,
       COUNT(CASE WHEN r.status = 'pending' AND NOT r.is_waitlist THEN rp.id ELSE NULL END)::int AS pending_participants,
       COALESCE((SELECT JSON_AGG(jsonb_build_object('id', i.id, 'event_id', i.event_id, 'url', i.url, 'alt_text', i.alt_text, 'position', i.position) ORDER BY i.position) FROM event_images i WHERE i.event_id = e.id), '[]') AS images
@@ -133,7 +133,7 @@ export interface EventPriceBasis {
 }
 
 /**
- * Speichert Produkt und Price IDs aus dem Stripe-Abgleich – aber nur, wenn das
+ * Speichert Produkte und Price IDs aus dem Stripe-Abgleich – aber nur, wenn das
  * Event noch genau die Beträge hat, aus denen abgeglichen wurde. Hat jemand
  * inzwischen erneut gespeichert, gehören die IDs zu einem alten Betrag und
  * dürfen nicht stehen bleiben; dann gibt die Funktion false zurück.
@@ -151,7 +151,9 @@ export async function saveEventStripeCatalog(
   const sql = getSQL();
   const rows = await sql`
     UPDATE events SET
-      stripe_product_id = ${catalog.stripe_product_id},
+      -- Das frühere Einzelprodukt ist nach dem Abgleich archiviert.
+      stripe_product_id = NULL,
+      stripe_tier_products = ${catalog.stripe_tier_products ? JSON.stringify(catalog.stripe_tier_products) : null}::jsonb,
       stripe_price_id = ${catalog.stripe_price_id},
       stripe_child_price_id = ${catalog.stripe_child_price_id},
       stripe_adult_reduced_30_price_id = ${catalog.stripe_adult_reduced_30_price_id},

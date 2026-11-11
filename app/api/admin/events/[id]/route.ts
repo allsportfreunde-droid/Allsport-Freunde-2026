@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { EventCreateInput } from "@/lib/types";
 import { normalizeManualChildPrice, normalizePrice } from "@/lib/price";
 import { validateCancellationDeadline } from "@/lib/cancellation";
-import { archiveEventStripeProduct, syncStoredEventCatalog } from "@/lib/stripe-catalog";
+import { archiveEventStripeProducts, syncStoredEventCatalog } from "@/lib/stripe-catalog";
 import { stripeProductUrl } from "@/lib/stripe";
 
 export async function GET(
@@ -17,7 +17,11 @@ export async function GET(
     if (!event) {
       return NextResponse.json({ error: "Event nicht gefunden." }, { status: 404 });
     }
-    return NextResponse.json({ ...event, stripe_product_url: stripeProductUrl(event.stripe_product_id) });
+    // Links ins Dashboard entstehen hier, weil der Modus (Test/Live) im Schlüssel steckt.
+    const stripe_product_urls = Object.fromEntries(
+      Object.entries(event.stripe_tier_products ?? {}).map(([tier, productId]) => [tier, stripeProductUrl(productId)])
+    );
+    return NextResponse.json({ ...event, stripe_product_urls });
   } catch (error) {
     console.error("Fehler beim Laden des Events:", error);
     return NextResponse.json({ error: "Event konnte nicht geladen werden." }, { status: 500 });
@@ -104,7 +108,7 @@ export async function DELETE(
     await deleteEvent(eventId);
     // Gelöschtes Event aus öffentlicher Liste entfernen → Cache invalidieren
     invalidateCache("events:");
-    await archiveEventStripeProduct(existing.stripe_product_id);
+    await archiveEventStripeProducts(existing);
     return NextResponse.json({ message: "Event gelöscht!" });
   } catch (error) {
     console.error("Fehler beim Löschen:", error);

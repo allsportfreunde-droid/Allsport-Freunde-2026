@@ -371,6 +371,39 @@ export default function DatenschutzPage() {
                   Zweck: Verbesserung unserer Veranstaltungen.
                 </p>
               </div>
+              {/* TODO Vorstand: Vorschlag – Text zu Ermäßigungen (§ 3) inhaltlich und rechtlich prüfen */}
+              <div className="border-l-4 border-green-500 pl-4">
+                <h3 className="font-semibold text-gray-900 mb-1">
+                  2.7 Ermäßigungen
+                </h3>
+                <p>
+                  Bei der Anmeldung können Sie für einzelne Personen eine
+                  Ermäßigung beantragen (Bezug von Sozialleistungen oder
+                  Schwerbehinderung). Dazu laden Sie einen Nachweis hoch
+                  (Leistungsbescheid bzw. Schwerbehindertenausweis). Ein
+                  Schwerbehindertenausweis enthält Gesundheitsdaten im Sinne
+                  von Art. 9 DSGVO. Der Nachweis wird ausschließlich vom
+                  Vorstand zur Prüfung angesehen und unmittelbar nach der
+                  Entscheidung gelöscht, spätestens nach 30 Tagen. Gespeichert
+                  bleiben nur die beantragte bzw. gewährte Ermäßigung, der
+                  Zeitpunkt und wer entschieden hat.
+                </p>
+                <p className="mt-2">
+                  Auf Wunsch nehmen wir Sie in unsere Ermäßigungsliste auf
+                  (Name, E-Mail-Adresse, Ermäßigungssatz, Prüfdatum, ggf.
+                  Gültigkeit). Bei künftigen Anmeldungen erkennt das
+                  Anmeldeformular die Ermäßigung dann anhand von Name und
+                  E-Mail-Adresse automatisch und zeigt sie an.
+                </p>
+                <p className="mt-1 text-gray-500">
+                  Zweck: Gewährung der Ermäßigung nach § 3 der
+                  Beitragsordnung. Rechtsgrundlage: Ihre ausdrückliche
+                  Einwilligung, Art. 9 Abs. 2 lit. a i. V. m. Art. 6 Abs. 1
+                  lit. a DSGVO. Die Einwilligung können Sie jederzeit mit
+                  Wirkung für die Zukunft widerrufen; der Eintrag in der
+                  Ermäßigungsliste wird dann gelöscht.
+                </p>
+              </div>
             </div>
           </Section>
 

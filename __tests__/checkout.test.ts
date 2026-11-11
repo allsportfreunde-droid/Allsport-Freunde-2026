@@ -46,7 +46,7 @@ beforeEach(() => {
   checkoutInfo.mockResolvedValue(info());
   savePricing.mockResolvedValue(undefined);
   createSession.mockImplementation(async (params) => {
-    const amounts: Record<string, number> = { price_adult: 1000, price_child: 400, price_free: 0, price_new: 200 };
+    const amounts: Record<string, number> = { price_adult: 1000, price_child: 400, price_free: 0, price_new: 200, price_adult_50: 500 };
     const items = params.line_items as Array<{ price?: string; price_data?: { unit_amount?: number }; quantity: number }>;
     return {
       id: "cs_test", url: "https://checkout.stripe.com/test", currency: "eur",
@@ -145,6 +145,26 @@ describe("Checkout mit Erwachsenen und Kindern", () => {
     expect(createSession).not.toHaveBeenCalled();
   });
 
+  it("rechnet ermäßigte Personen mit ihrer Price ID oder ihrem Betrag ab", async () => {
+    checkoutInfo.mockResolvedValue(info({
+      person_count: 3, child_count: 1,
+      stripe_adult_reduced_50_price_id: "price_adult_50",
+      persons: [
+        { id: "p1", is_child: false, discount: null },
+        { id: "p2", is_child: false, discount: "reduced_50" },
+        { id: "p3", is_child: true, discount: "reduced_30" },
+      ],
+    }));
+    expect((await POST(request())).status).toBe(200);
+    expect(createSession.mock.calls[0][0].line_items).toEqual([
+      { price: "price_adult", quantity: 1 },
+      { price: "price_adult_50", quantity: 1 },
+      // Ohne hinterlegte ID (etwa vor dem ersten Stripe-Abgleich) mit dem Betrag selbst.
+      { price_data: { currency: "eur", unit_amount: 280, product_data: { name: "Sport – Kinder (30 % ermäßigt)" } }, quantity: 1 },
+    ]);
+    expect(savePricing).toHaveBeenCalledWith("cs_test", 1, { p1: 1000, p2: 500, p3: 280 });
+  });
+
   it("zählt gespeicherte Kinder und schließt stornierte Personen aus", async () => {
     const event: EventCreateInput = {
       title: "Sport", category: "fussball", description: "", date: "2099-06-01", time: "12:00",
@@ -154,7 +174,8 @@ describe("Checkout mit Erwachsenen und Kindern", () => {
     const { id } = createLocalEvent(event);
     // Stellvertretend für den Stripe-Abgleich nach dem Speichern.
     const catalog = (child: string) => ({
-      stripe_product_id: "prod_event", stripe_price_id: "price_adult", stripe_child_price_id: child,
+      stripe_tier_products: { adult: "prod_adult", child: "prod_child" },
+      stripe_price_id: "price_adult", stripe_child_price_id: child,
       stripe_adult_reduced_30_price_id: null, stripe_adult_reduced_50_price_id: null,
       stripe_child_reduced_30_price_id: null, stripe_child_reduced_50_price_id: null,
     });

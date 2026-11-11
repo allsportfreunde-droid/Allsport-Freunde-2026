@@ -177,7 +177,7 @@ export async function getRegistrationWithPersonsByQRToken(token: string): Promis
   if (!rows[0]) return null;
   const reg = rows[0] as { id: number; first_name: string; last_name: string; email: string | null; status: string; checked_in_at: string | null; is_walk_in: boolean; paid_at: string | null };
   const persons = await sql`
-    SELECT id::text AS id, registration_id, first_name, last_name, is_child, checked_in_at, cancelled_at, created_at
+    SELECT id::text AS id, registration_id, first_name, last_name, is_child, discount, checked_in_at, cancelled_at, created_at
     FROM registration_persons
     WHERE registration_id = ${reg.id} AND cancelled_at IS NULL
     ORDER BY created_at ASC
@@ -252,7 +252,7 @@ async function getPersonsByRegistration(
   const sql = getSQL();
   type PersonRow = import("../types").RegistrationPerson & { registration_id: number };
   const personRows = await sql`
-    SELECT id::text AS id, registration_id, first_name, last_name, is_child, checked_in_at, cancelled_at, created_at
+    SELECT id::text AS id, registration_id, first_name, last_name, is_child, discount, checked_in_at, cancelled_at, created_at
     FROM registration_persons
     WHERE registration_id = ANY(${regIds})
       AND cancelled_at IS NULL

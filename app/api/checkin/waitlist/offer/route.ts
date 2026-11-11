@@ -7,7 +7,7 @@ import {
   offerWaitlistSpot,
 } from "@/lib/db";
 import { sendWaitlistSpotOfferedEmail } from "@/lib/email";
-import { formatPriceLabel } from "@/lib/price";
+import { formatPersonsPriceLabel } from "@/lib/price-tiers";
 
 /**
  * Bietet einer Wartelisten-Anmeldung einen frei gewordenen Platz an.
@@ -51,15 +51,11 @@ export async function POST(request: NextRequest) {
       if (event) {
         // Betrag wie auf der Status-Seite: nur wenn der Anzeigetext ein reiner
         // Betrag ist, wird eine Summe genannt. Siehe lib/price.ts.
+        // Ermäßigungen je Person stecken in checkout.persons – derselbe Betrag wie im Checkout.
         const checkout = await getCheckoutInfo(registration.status_token);
         const priceLabel =
-          formatPriceLabel(
-            checkout?.entry_price,
-            checkout?.person_count ?? 0,
-            event.price,
-            checkout?.child_entry_price,
-            checkout?.child_count ?? 0
-          ) ?? undefined;
+          (checkout ? formatPersonsPriceLabel({ ...checkout, price: event.price }, checkout.persons) : null) ??
+          undefined;
 
         // Fire-and-forget email
         sendWaitlistSpotOfferedEmail({
