@@ -8,6 +8,7 @@ export * from "./inquiries";
 export * from "./helpers";
 export * from "./discount-holders";
 export * from "./discount-requests";
+export * from "./person-discount";
 export * from "./checkout";
 export * from "./checkout-creation";
 export * from "./reviews";

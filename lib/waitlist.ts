@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getEvent, getOpenEventCheckouts, getWaitlistRecipients, isEventFull } from "@/lib/db";
 import { getStripe } from "@/lib/stripe";
+import { expireOpenCheckouts } from "@/lib/checkout-expire";
 import { buildWaitlistSpotFreedEmail, sendEmailBatch } from "@/lib/email";
 import { calculateTierPrices, formatPersonsPriceLabel } from "@/lib/price-tiers";
 import { berlinToday } from "@/lib/review";
@@ -49,16 +50,7 @@ async function closeOpenEventCheckouts(eventId: number): Promise<void> {
   if (sessions.length === 0) return;
   const stripe = getStripe();
   if (!stripe) return;
-
-  for (const { session_id } of sessions) {
-    try {
-      const session = await stripe.checkout.sessions.retrieve(session_id);
-      if (session.status === "open") await stripe.checkout.sessions.expire(session_id);
-    } catch (error) {
-      // Gerade abgeschlossen oder schon abgelaufen – beides ist in Ordnung.
-      console.warn(`Bezahlfenster ${session_id} konnte nicht geschlossen werden:`, error);
-    }
-  }
+  await expireOpenCheckouts(stripe, sessions.map(({ session_id }) => session_id));
 }
 
 /**

@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
-    "test:integration": "vitest run __tests__/cancellation-race.integration.test.ts __tests__/discount-requests.integration.test.ts",
+    "test:integration": "vitest run __tests__/cancellation-race.integration.test.ts __tests__/discount-requests.integration.test.ts __tests__/person-discount.integration.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "docker:push:qa": "powershell -ExecutionPolicy Bypass -File scripts/push-qa-image.ps1",

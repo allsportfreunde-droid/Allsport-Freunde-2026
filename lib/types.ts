@@ -235,6 +235,8 @@ export interface RegistrationDetail extends RegistrationWithEvent {
    * Betrag dort einzutragen ist.
    */
   refund_due?: { amount: number; persons: number } | null;
+  /** Das Event hat einen verbindlichen Preis – nur dann lässt sich eine Ermäßigung setzen. */
+  discount_available?: boolean;
   /** All persons registered under this email (incl. main person), ordered by created_at */
   persons: RegistrationPerson[];
 }
