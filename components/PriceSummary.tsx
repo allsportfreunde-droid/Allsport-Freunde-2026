@@ -16,7 +16,7 @@ export default function PriceSummary({
   note,
 }: {
   pricing: PersonsPrice;
-  /** Zusatz unter der Summe, etwa "Ermäßigung vorbehaltlich der Prüfung". */
+  /** Zusatz unter der Summe. */
   note?: string;
 }) {
   if (!pricing.hasDiscount) {

@@ -165,6 +165,19 @@ describe("Checkout mit Erwachsenen und Kindern", () => {
     expect(savePricing).toHaveBeenCalledWith("cs_test", 1, { p1: 1000, p2: 500, p3: 280 });
   });
 
+  it("lässt mit eingereichtem Nachweis sofort ermäßigt zahlen, auch wenn das Team noch nicht geprüft hat", async () => {
+    // Offener Antrag mit Nachweis: Die Ermäßigung steht seit dem Upload an der Person.
+    checkoutInfo.mockResolvedValue(info({
+      person_count: 1, child_count: 0,
+      persons: [{ id: "p1", is_child: false, discount: "reduced_50" }],
+    }));
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    expect(createSession.mock.calls[0][0].line_items).toEqual([
+      { price_data: { currency: "eur", unit_amount: 500, product_data: { name: "Sport – Erwachsene (50 % ermäßigt)" } }, quantity: 1 },
+    ]);
+  });
+
   it("zählt gespeicherte Kinder und schließt stornierte Personen aus", async () => {
     const event: EventCreateInput = {
       title: "Sport", category: "fussball", description: "", date: "2099-06-01", time: "12:00",

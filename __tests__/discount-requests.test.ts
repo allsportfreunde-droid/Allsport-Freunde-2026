@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { detectProofType } from "@/lib/discount-requests";
+import { detectProofType, discountRequestLabel } from "@/lib/discount-requests";
+
+describe("Statustext eines Antrags", () => {
+  it("nennt nur, ob der Nachweis eingereicht ist – nie das Ergebnis der Prüfung", () => {
+    expect(discountRequestLabel({ discount: "reduced_50", has_proof: true })).toBe("Ermäßigung −50 % · Nachweis eingereicht");
+    expect(discountRequestLabel({ discount: "reduced_30", has_proof: false }))
+      .toBe("Ermäßigung −30 % beantragt – ohne Nachweis gilt der reguläre Preis");
+  });
+});
 
 describe("Nachweis-Dateitypen", () => {
   it("erkennt ein PDF auch mit vorangestellten Bytes im zulässigen Headerbereich", () => {

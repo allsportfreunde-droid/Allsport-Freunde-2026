@@ -6,7 +6,6 @@ import StatusBadge from "./StatusBadge";
 import ChildBadge from "@/components/ChildBadge";
 import DiscountBadge from "@/components/DiscountBadge";
 import PriceSummary from "@/components/PriceSummary";
-import ProofUpload from "@/components/registration/ProofUpload";
 import { discountRequestLabel, type DiscountRequestInfo } from "@/lib/discount-requests";
 import { Calendar, Clock, MapPin, Euro, Shirt, Mail, Users, X, CheckCircle2, Loader2 } from "lucide-react";
 import type { RegistrationStatusInfo, RegistrationPerson, RegistrationStatus } from "@/lib/types";
@@ -58,11 +57,10 @@ interface PersonRowProps {
   onCancelled: (personId: string, allCancelled: boolean) => void;
   /** Ermäßigungsantrag dieser Person, falls gestellt. */
   discountRequest?: DiscountRequestInfo;
-  onProofUploaded: (requestId: number) => void;
 }
 
 function PersonRow({
-  person, index, token, registrationStatus, cancellationOpen, onCancelled, discountRequest, onProofUploaded,
+  person, index, token, registrationStatus, cancellationOpen, onCancelled, discountRequest,
 }: PersonRowProps) {
   const [cancelling, setCancelling] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -125,28 +123,9 @@ function PersonRow({
               </p>
             )}
             {discountRequest && !isCancelled && (
-              <div className="mt-1 space-y-1">
-                <p
-                  className={`text-xs ${
-                    discountRequest.status === "approved"
-                      ? "text-green-700"
-                      : discountRequest.status === "rejected" ? "text-gray-500" : "text-amber-700"
-                  }`}
-                >
-                  {discountRequestLabel(discountRequest)}
-                </p>
-                {discountRequest.status === "rejected" && discountRequest.decision_note && (
-                  <p className="text-xs text-gray-500">Hinweis vom Team: {discountRequest.decision_note}</p>
-                )}
-                {discountRequest.status === "pending" && (
-                  <ProofUpload
-                    statusToken={token}
-                    requestId={discountRequest.id}
-                    hasProof={discountRequest.has_proof}
-                    onUploaded={() => onProofUploaded(discountRequest.id)}
-                  />
-                )}
-              </div>
+              <p className={`text-xs mt-1 ${discountRequest.has_proof ? "text-green-700" : "text-gray-500"}`}>
+                {discountRequestLabel(discountRequest)}
+              </p>
             )}
           </div>
         </div>
@@ -223,10 +202,8 @@ export default function StatusPage({
   // offene Anmeldung, bis ein Platz frei wird. Meldet der Checkout zwischendurch
   // "ausgebucht", wird der Stand hier nachgezogen.
   const [eventFull, setEventFull] = useState(info.event_full);
-  const [discountRequests, setDiscountRequests] = useState<DiscountRequestInfo[]>(info.discount_requests ?? []);
+  const discountRequests: DiscountRequestInfo[] = info.discount_requests ?? [];
   const requestFor = (personId: string) => discountRequests.find((r) => r.person_id === personId);
-  // Offen = noch nicht entschieden; solange gibt es kein Bezahlen (der Checkout sperrt ebenso).
-  const pendingRequests = activePersons.filter((p) => requestFor(p.id)?.status === "pending");
 
   const eventPricing = {
     price: info.event_price,
@@ -234,14 +211,9 @@ export default function StatusPage({
     child_entry_price: info.event_child_entry_price,
     child_price: info.event_child_price,
   };
-  // Beantragte Ermäßigungen schon einrechnen – vorbehaltlich der Prüfung.
-  const pricing = calculatePersonsPrice(
-    eventPricing,
-    activePersons.map((p) => {
-      const request = requestFor(p.id);
-      return { ...p, discount: p.discount ?? (request?.status === "pending" ? request.discount : null) };
-    })
-  );
+  // Es gilt, was an der Person steht: Mit dem Nachweis aus der Anmeldung ist
+  // die Ermäßigung gesetzt, ohne ihn gilt der reguläre Preis.
+  const pricing = calculatePersonsPrice(eventPricing, activePersons);
   const totalPrice = pricing ? pricing.totalCents / 100 : null;
   const isPaid = info.paid_at != null;
   // Tatsächlicher Zahlungsstand aus der Datenbank – nicht aus dem URL-Parameter.
@@ -257,8 +229,7 @@ export default function StatusPage({
     !paymentPending &&
     !waiting &&
     (status === "pending" || status === "approved");
-  const awaitingDiscountDecision = payable && pendingRequests.length > 0;
-  const canPay = payable && !awaitingDiscountDecision;
+  const canPay = payable;
 
   async function handlePay() {
     setPayLoading(true);
@@ -535,9 +506,6 @@ export default function StatusPage({
                   cancellationOpen={cancellationOpen}
                   onCancelled={handlePersonCancelled}
                   discountRequest={requestFor(person.id)}
-                  onProofUploaded={(requestId) =>
-                    setDiscountRequests((prev) => prev.map((r) => (r.id === requestId ? { ...r, has_proof: true } : r)))
-                  }
                 />
               ))}
 
@@ -607,23 +575,13 @@ export default function StatusPage({
           </Card>
         )}
 
-        {(canPay || awaitingDiscountDecision || paymentReceived || paymentPending) && (
+        {(canPay || paymentReceived || paymentPending) && (
           <Card>
             <CardHeader>
               <CardTitle className="text-lg">Zahlung</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {awaitingDiscountDecision ? (
-                <div className="space-y-3">
-                  <div className="text-sm text-amber-800 bg-amber-50 rounded-lg p-3">
-                    Bezahlen kannst du, sobald wir deine Ermäßigung geprüft haben – du bekommst eine E-Mail.
-                    {pendingRequests.some((p) => !requestFor(p.id)?.has_proof) && (
-                      <> Bitte lade dafür noch den fehlenden Nachweis oben bei der Person hoch.</>
-                    )}
-                  </div>
-                  {pricing && <PriceSummary pricing={pricing} note="Ermäßigung vorbehaltlich der Prüfung" />}
-                </div>
-              ) : paymentReceived ? (
+              {paymentReceived ? (
                 <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 rounded-lg p-3">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
                   <span>

@@ -24,26 +24,44 @@ export async function getProofUploadTarget(
   return (rows[0] as { id: number; status: DiscountRequestStatus }) ?? null;
 }
 
-/** Speichert (oder ersetzt) den Nachweis eines offenen Antrags. false = nicht mehr offen. */
+/**
+ * Speichert (oder ersetzt) den Nachweis eines offenen Antrags. false = nicht mehr offen.
+ *
+ * Auf Vertrauen: Mit dem Nachweis gilt die Ermäßigung sofort und die Person
+ * kann ermäßigt bezahlen. Das Team sieht sich den Antrag danach noch an
+ * (decideDiscountRequest). Eine bereits bezahlte Anmeldung bleibt beim Preis.
+ */
 export async function saveDiscountProof(requestId: number, bytes: Uint8Array, type: ProofType): Promise<boolean> {
   const sql = getSQL();
   // Als Hex-Literal übergeben – so kommt bytea unabhängig vom Treiber unverändert an.
   const hex = `\\x${Buffer.from(bytes).toString("hex")}`;
-  const rows = await sql`
-    UPDATE discount_requests
-    SET proof_data = ${hex}::bytea, proof_type = ${type}, proof_uploaded_at = NOW(), proof_deleted_at = NULL
-    WHERE id = ${requestId} AND status = 'pending'
-    RETURNING id
-  `;
-  return rows.length > 0;
+  const [saved] = await sql.transaction([
+    sql`
+      UPDATE discount_requests
+      SET proof_data = ${hex}::bytea, proof_type = ${type}, proof_uploaded_at = NOW(), proof_deleted_at = NULL
+      WHERE id = ${requestId} AND status = 'pending'
+      RETURNING id
+    `,
+    sql`
+      UPDATE registration_persons rp SET discount = dr.discount
+      FROM discount_requests dr, registrations r
+      WHERE dr.id = ${requestId} AND dr.status = 'pending' AND dr.proof_uploaded_at IS NOT NULL
+        AND rp.id = dr.person_id AND r.id = rp.registration_id AND r.paid_at IS NULL
+    `,
+  ]);
+  return saved.length > 0;
 }
 
-/** Anträge einer Anmeldung für Status- und Erfolgsansicht – ohne Datei. */
+/**
+ * Anträge einer Anmeldung für Status- und Erfolgsansicht – ohne Datei und
+ * ohne das Ergebnis der Prüfung, das klärt das Team persönlich.
+ * `has_proof` heißt hier „eingereicht“ – auch wenn die Datei schon gelöscht ist.
+ */
 export async function getRegistrationDiscountRequests(registrationId: number): Promise<DiscountRequestInfo[]> {
   const sql = getSQL();
   const rows = await sql`
     SELECT id, person_id::text AS person_id, discount, status,
-      proof_data IS NOT NULL AS has_proof, decision_note
+      proof_uploaded_at IS NOT NULL AS has_proof
     FROM discount_requests
     WHERE registration_id = ${registrationId}
     ORDER BY id
@@ -56,7 +74,10 @@ export interface AdminDiscountRequest {
   discount: Discount;
   status: DiscountRequestStatus;
   remember: boolean;
+  /** Die Datei liegt noch vor und lässt sich ansehen. */
   has_proof: boolean;
+  /** Ein Nachweis wurde eingereicht – auch wenn er inzwischen gelöscht ist. */
+  proof_uploaded: boolean;
   proof_type: ProofType | null;
   proof_deleted_at: string | null;
   created_at: string;
@@ -81,7 +102,8 @@ export async function getDiscountRequestsForAdmin(): Promise<AdminDiscountReques
   const rows = await sql`
     SELECT
       dr.id, dr.discount, dr.status, dr.remember,
-      dr.proof_data IS NOT NULL AS has_proof, dr.proof_type, dr.proof_deleted_at,
+      dr.proof_data IS NOT NULL AS has_proof, dr.proof_uploaded_at IS NOT NULL AS proof_uploaded,
+      dr.proof_type, dr.proof_deleted_at,
       dr.created_at, dr.decided_at, dr.decided_by, dr.decision_note,
       rp.first_name, rp.last_name, rp.is_child, rp.cancelled_at IS NOT NULL AS person_cancelled,
       r.id AS registration_id, r.email, r.status AS registration_status, r.paid_at IS NOT NULL AS paid,
@@ -109,31 +131,17 @@ export async function getDiscountProof(requestId: number): Promise<{ type: Proof
 }
 
 export type DiscountDecisionResult =
-  | {
-      ok: true;
-      /** false, wenn die Anmeldung inzwischen bezahlt war – dann bleibt der Preis, wie er ist. */
-      applied: boolean;
-      remembered: boolean;
-      mail: {
-        to: string | null;
-        /** Vorname der Hauptperson – sie bekommt die Mail. */
-        firstName: string;
-        /** Person mit dem Antrag. */
-        personName: string;
-        statusToken: string;
-        eventTitle: string;
-        eventDate: string;
-        eventTime: string;
-        eventLocation: string;
-        discount: Discount;
-      };
-    }
+  | { ok: true; remembered: boolean }
   | { ok: false; reason: "not_found" | "already_decided" | "proof_missing" };
 
 /**
- * Entscheidet einen offenen Antrag – in einer Transaktion:
- * Bestätigt ⇒ Ermäßigung an der Person (nur unbezahlt) und, mit Einwilligung,
- * Eintrag in die Ermäßigungsliste. In beiden Fällen wird der Nachweis gelöscht.
+ * Vermerkt die Prüfung eines offenen Antrags – in einer Transaktion. Am Preis
+ * ändert sich nichts: Die Ermäßigung gilt schon seit dem Upload (saveDiscountProof).
+ *
+ * Bestätigt ⇒ mit Einwilligung Eintrag in die Ermäßigungsliste. Abgelehnt ⇒
+ * nur der Vermerk, das Team klärt es persönlich. In beiden Fällen wird der
+ * Nachweis gelöscht. Bestätigen setzt voraus, dass einer eingereicht wurde –
+ * er darf aber schon gelöscht sein (Frist abgelaufen).
  */
 export async function decideDiscountRequest(
   requestId: number,
@@ -146,18 +154,8 @@ export async function decideDiscountRequest(
   const approve = decision === "approved";
   const none = sql`SELECT NULL WHERE FALSE`;
 
-  const [locked, applied, remembered, decided] = await sql.transaction([
-    sql`SELECT id, status, proof_data IS NOT NULL AS has_proof FROM discount_requests WHERE id = ${requestId} FOR UPDATE`,
-    approve
-      ? sql`
-          UPDATE registration_persons rp SET discount = dr.discount
-          FROM discount_requests dr, registrations r
-          WHERE dr.id = ${requestId} AND dr.status = 'pending'
-            AND dr.proof_data IS NOT NULL
-            AND rp.id = dr.person_id AND r.id = rp.registration_id AND r.paid_at IS NULL
-          RETURNING rp.id
-        `
-      : none,
+  const [locked, remembered, decided] = await sql.transaction([
+    sql`SELECT id, status, proof_uploaded_at IS NOT NULL AS proof_uploaded FROM discount_requests WHERE id = ${requestId} FOR UPDATE`,
     approve
       ? sql`
           INSERT INTO discount_holders
@@ -167,7 +165,7 @@ export async function decideDiscountRequest(
           FROM discount_requests dr
           JOIN registration_persons rp ON rp.id = dr.person_id
           JOIN registrations r ON r.id = dr.registration_id
-          WHERE dr.id = ${requestId} AND dr.status = 'pending' AND dr.proof_data IS NOT NULL
+          WHERE dr.id = ${requestId} AND dr.status = 'pending' AND dr.proof_uploaded_at IS NOT NULL
             AND dr.remember AND r.email IS NOT NULL
           ON CONFLICT (email, LOWER(first_name), LOWER(last_name)) DO UPDATE SET
             discount = EXCLUDED.discount,
@@ -178,62 +176,24 @@ export async function decideDiscountRequest(
           RETURNING id
         `
       : none,
-    // Zuletzt der Status – eine Bestätigung braucht zwingend einen gespeicherten Nachweis.
-    approve
-      ? sql`
-          UPDATE discount_requests SET
-            status = ${decision}, decided_at = NOW(), decided_by = ${adminEmail}, decision_note = ${note},
-            proof_deleted_at = NOW(), proof_data = NULL
-          WHERE id = ${requestId} AND status = 'pending' AND proof_data IS NOT NULL
-          RETURNING id
-        `
-      : sql`
-          UPDATE discount_requests SET
-            status = ${decision}, decided_at = NOW(), decided_by = ${adminEmail}, decision_note = ${note},
-            proof_deleted_at = CASE WHEN proof_data IS NOT NULL THEN NOW() ELSE proof_deleted_at END,
-            proof_data = NULL
-          WHERE id = ${requestId} AND status = 'pending'
-          RETURNING id
-        `,
+    // Zuletzt der Status – eine Bestätigung braucht einen eingereichten Nachweis.
+    sql`
+      UPDATE discount_requests SET
+        status = ${decision}, decided_at = NOW(), decided_by = ${adminEmail}, decision_note = ${note},
+        proof_deleted_at = CASE WHEN proof_data IS NOT NULL THEN NOW() ELSE proof_deleted_at END,
+        proof_data = NULL
+      WHERE id = ${requestId} AND status = 'pending'
+        AND (${!approve}::boolean OR proof_uploaded_at IS NOT NULL)
+      RETURNING id
+    `,
   ]);
 
   if (locked.length === 0) return { ok: false, reason: "not_found" };
   if (decided.length === 0) {
-    const request = locked[0] as { status: DiscountRequestStatus; has_proof: boolean };
-    return { ok: false, reason: request.status === "pending" && !request.has_proof ? "proof_missing" : "already_decided" };
+    const request = locked[0] as { status: DiscountRequestStatus; proof_uploaded: boolean };
+    return { ok: false, reason: request.status === "pending" && !request.proof_uploaded ? "proof_missing" : "already_decided" };
   }
-
-  const rows = await sql`
-    SELECT r.email, r.status_token, rp.first_name, rp.last_name, dr.discount,
-      COALESCE((SELECT main.first_name FROM registration_persons main
-        WHERE main.registration_id = r.id ORDER BY main.created_at LIMIT 1), rp.first_name) AS main_first_name,
-      e.title AS event_title, TO_CHAR(e.date, 'YYYY-MM-DD') AS event_date, e.time::text AS event_time, e.location AS event_location
-    FROM discount_requests dr
-    JOIN registration_persons rp ON rp.id = dr.person_id
-    JOIN registrations r ON r.id = dr.registration_id
-    JOIN events e ON e.id = r.event_id
-    WHERE dr.id = ${requestId}
-  `;
-  const row = rows[0] as {
-    email: string | null; status_token: string; first_name: string; last_name: string; discount: Discount;
-    main_first_name: string; event_title: string; event_date: string; event_time: string; event_location: string;
-  };
-  return {
-    ok: true,
-    applied: applied.length > 0,
-    remembered: remembered.length > 0,
-    mail: {
-      to: row.email,
-      firstName: row.main_first_name,
-      personName: `${row.first_name} ${row.last_name}`,
-      statusToken: row.status_token,
-      eventTitle: row.event_title,
-      eventDate: row.event_date,
-      eventTime: row.event_time,
-      eventLocation: row.event_location,
-      discount: row.discount,
-    },
-  };
+  return { ok: true, remembered: remembered.length > 0 };
 }
 
 /**

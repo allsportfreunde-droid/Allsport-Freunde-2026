@@ -130,6 +130,9 @@ describe.skipIf(!databaseUrl)("Ermäßigungsanträge in PostgreSQL", () => {
     return { token, registrationId: registration.id as number, personId: person.id as string, requestId: request.id as number };
   }
 
+  const personDiscount = async (personId: string) =>
+    (await q(`SELECT discount FROM registration_persons WHERE id = $1`, [personId]))[0].discount;
+
   it("lädt nur mit passendem Token hoch und gibt die Bytes unverändert zurück", async () => {
     const f = await fixture({ remember: true });
     expect(await db.getProofUploadTarget(f.token, f.requestId)).toEqual({ id: f.requestId, status: "pending" });
@@ -141,21 +144,29 @@ describe.skipIf(!databaseUrl)("Ermäßigungsanträge in PostgreSQL", () => {
     expect([...proof!.data]).toEqual([...JPEG]);
 
     const [info] = await db.getRegistrationDiscountRequests(f.registrationId);
-    expect(info).toMatchObject({ id: f.requestId, person_id: f.personId, status: "pending", has_proof: true });
+    expect(info).toEqual({ id: f.requestId, person_id: f.personId, discount: "reduced_50", status: "pending", has_proof: true });
     const listed = (await db.getDiscountRequestsForAdmin()).find((r) => r.id === f.requestId)!;
-    expect(listed).toMatchObject({ has_proof: true, first_name: "Anna", event_title: "Schwimmen", paid: false });
+    expect(listed).toMatchObject({ has_proof: true, proof_uploaded: true, first_name: "Anna", event_title: "Schwimmen", paid: false });
     expect(listed).not.toHaveProperty("proof_data");
   });
 
-  it("bestätigt in einem Schritt: Ermäßigung an der Person, Listeneintrag, Nachweis gelöscht", async () => {
+  it("gewährt die Ermäßigung auf Vertrauen, sobald der Nachweis hochgeladen ist", async () => {
+    const f = await fixture();
+    expect(await personDiscount(f.personId)).toBeNull();
+    await db.saveDiscountProof(f.requestId, JPEG, "image/jpeg");
+    expect(await personDiscount(f.personId)).toBe("reduced_50");
+    // Noch ungeprüft – der Antrag bleibt für das Team offen.
+    expect((await q(`SELECT status FROM discount_requests WHERE id = $1`, [f.requestId]))[0].status).toBe("pending");
+  });
+
+  it("bestätigt in einem Schritt: Listeneintrag, Nachweis gelöscht, Ermäßigung bleibt", async () => {
     const f = await fixture({ remember: true });
     await db.saveDiscountProof(f.requestId, JPEG, "image/jpeg");
 
     const result = await db.decideDiscountRequest(f.requestId, "approved", null, "admin@verein.de", "2026-11-10");
-    expect(result).toMatchObject({ ok: true, applied: true, remembered: true });
-    expect(result.ok && result.mail).toMatchObject({ to: "anna@example.de", firstName: "Anna", personName: "Anna Muster", discount: "reduced_50" });
+    expect(result).toEqual({ ok: true, remembered: true });
 
-    expect((await q(`SELECT discount FROM registration_persons WHERE id = $1`, [f.personId]))[0].discount).toBe("reduced_50");
+    expect(await personDiscount(f.personId)).toBe("reduced_50");
     const [request] = await q(`SELECT status, proof_data, proof_deleted_at, decided_by FROM discount_requests WHERE id = $1`, [f.requestId]);
     expect(request).toMatchObject({ status: "approved", proof_data: null, decided_by: "admin@verein.de" });
     expect(request.proof_deleted_at).not.toBeNull();
@@ -169,12 +180,12 @@ describe.skipIf(!databaseUrl)("Ermäßigungsanträge in PostgreSQL", () => {
       .toEqual({ ok: false, reason: "not_found" });
   });
 
-  it("bestätigt keine Ermäßigung ohne hinterlegten Nachweis", async () => {
+  it("bestätigt keine Ermäßigung ohne eingereichten Nachweis", async () => {
     const f = await fixture();
 
     expect(await db.decideDiscountRequest(f.requestId, "approved", null, "admin@verein.de", "2026-11-10"))
       .toEqual({ ok: false, reason: "proof_missing" });
-    expect((await q(`SELECT discount FROM registration_persons WHERE id = $1`, [f.personId]))[0].discount).toBeNull();
+    expect(await personDiscount(f.personId)).toBeNull();
     expect((await q(`SELECT status FROM discount_requests WHERE id = $1`, [f.requestId]))[0].status).toBe("pending");
     expect(await q(`SELECT 1 FROM discount_holders WHERE email = 'anna@example.de'`)).toHaveLength(0);
   });
@@ -191,22 +202,45 @@ describe.skipIf(!databaseUrl)("Ermäßigungsanträge in PostgreSQL", () => {
 
   it("ändert an einer bezahlten Anmeldung den Preis nicht", async () => {
     const f = await fixture({ name: ["Bea", "Bezahlt"], paid: true });
-    await db.saveDiscountProof(f.requestId, JPEG, "image/jpeg");
+    expect(await db.saveDiscountProof(f.requestId, JPEG, "image/jpeg")).toBe(true);
+    expect(await personDiscount(f.personId)).toBeNull();
     const result = await db.decideDiscountRequest(f.requestId, "approved", null, "admin@verein.de", "2026-11-10");
-    expect(result).toMatchObject({ ok: true, applied: false, remembered: false });
-    expect((await q(`SELECT discount FROM registration_persons WHERE id = $1`, [f.personId]))[0].discount).toBeNull();
+    expect(result).toEqual({ ok: true, remembered: false });
+    expect(await personDiscount(f.personId)).toBeNull();
   });
 
-  it("lehnt ab: keine Ermäßigung, Nachweis gelöscht, Begründung gespeichert", async () => {
+  it("lehnt ab: nur ein Vermerk – Ermäßigung bleibt, Nachweis gelöscht, kein Listeneintrag", async () => {
     const f = await fixture({ name: ["Cem", "Abgelehnt"], remember: true });
     await db.saveDiscountProof(f.requestId, JPEG, "image/jpeg");
     expect(await db.decideDiscountRequest(f.requestId, "rejected", "Bescheid abgelaufen", "admin@verein.de", "2026-11-10"))
-      .toMatchObject({ ok: true, applied: false, remembered: false });
-    expect((await q(`SELECT discount FROM registration_persons WHERE id = $1`, [f.personId]))[0].discount).toBeNull();
+      .toEqual({ ok: true, remembered: false });
+    expect(await personDiscount(f.personId)).toBe("reduced_50");
     const [request] = await q(`SELECT status, proof_data, decision_note FROM discount_requests WHERE id = $1`, [f.requestId]);
     expect(request).toEqual({ status: "rejected", proof_data: null, decision_note: "Bescheid abgelaufen" });
     expect(await db.saveDiscountProof(f.requestId, JPEG, "image/jpeg")).toBe(false);
     expect(await q(`SELECT 1 FROM discount_holders WHERE first_name = 'Cem'`)).toHaveLength(0);
+  });
+
+  it("lehnt auch ohne Nachweis ab", async () => {
+    const f = await fixture({ name: ["Ohne", "Nachweis"] });
+    expect(await db.decideDiscountRequest(f.requestId, "rejected", null, "admin@verein.de", "2026-11-10"))
+      .toEqual({ ok: true, remembered: false });
+    expect(await personDiscount(f.personId)).toBeNull();
+  });
+
+  it("bestätigt auch nach Ablauf der Frist, wenn der Nachweis schon gelöscht ist", async () => {
+    const f = await fixture({ name: ["Spät", "Geprüft"], remember: true, ageDays: 31 });
+    await db.saveDiscountProof(f.requestId, JPEG, "image/jpeg");
+    await db.purgeDiscountProofs();
+    expect(await db.getDiscountProof(f.requestId)).toBeNull();
+    const [before] = await q(`SELECT proof_deleted_at FROM discount_requests WHERE id = $1`, [f.requestId]);
+
+    expect(await db.decideDiscountRequest(f.requestId, "approved", null, "admin@verein.de", "2026-11-10"))
+      .toEqual({ ok: true, remembered: true });
+    const [after] = await q(`SELECT status, proof_deleted_at FROM discount_requests WHERE id = $1`, [f.requestId]);
+    expect(after.status).toBe("approved");
+    // Der Löschzeitpunkt bleibt der ursprüngliche.
+    expect(after.proof_deleted_at).toEqual(before.proof_deleted_at);
   });
 
   it("löscht fällige Nachweise und lässt frische stehen", async () => {

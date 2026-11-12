@@ -818,9 +818,6 @@ export async function getCheckoutInfo(token: string): Promise<CheckoutInfo | nul
       e.child_entry_price::float8 AS child_entry_price, e.stripe_child_price_id,
       e.stripe_adult_reduced_30_price_id, e.stripe_adult_reduced_50_price_id,
       e.stripe_child_reduced_30_price_id, e.stripe_child_reduced_50_price_id,
-      (SELECT COUNT(*)::int FROM discount_requests dr
-        JOIN registration_persons rp ON rp.id = dr.person_id
-        WHERE dr.registration_id = r.id AND dr.status = 'pending' AND rp.cancelled_at IS NULL) AS pending_discount_requests,
       (SELECT COUNT(*)::int FROM registration_persons rp
         WHERE rp.registration_id = r.id AND rp.cancelled_at IS NULL) AS person_count,
       (SELECT COUNT(*)::int FROM registration_persons rp

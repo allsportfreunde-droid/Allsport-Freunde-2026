@@ -19,7 +19,7 @@ export default function DiscountNotice({
   discount: Discount | null;
   fullCents: number | null;
   reducedCents: number | null;
-  /** Beantragt statt erkannt: gilt erst nach der Prüfung. */
+  /** Beantragt statt erkannt – der Nachweis wird mit der Anmeldung eingereicht. */
   pending?: boolean;
 }) {
   const reduceMotion = useReducedMotion();
@@ -53,7 +53,6 @@ export default function DiscountNotice({
               {fullCents != null && reducedCents != null && (
                 <> · {formatEuro(reducedCents / 100)} statt {formatEuro(fullCents / 100)}</>
               )}
-              {pending && <span className="block text-xs">Wird vor der Zahlung geprüft.</span>}
             </span>
           </motion.div>
         )}

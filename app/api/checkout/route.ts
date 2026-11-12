@@ -11,9 +11,6 @@ import { discoverRegistrationCheckouts, recoverCheckoutCreation } from "@/lib/ch
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
-const DISCOUNT_PENDING_MESSAGE =
-  "Deine Ermäßigung wird noch geprüft. Bezahlen kannst du, sobald sie entschieden ist – du bekommst eine E-Mail.";
-
 const EVENT_FULL_MESSAGE =
   "Das Event ist gerade ausgebucht. Du stehst auf der Warteliste – wird ein Platz frei, bekommst du eine E-Mail und kannst sofort bezahlen.";
 
@@ -76,10 +73,6 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
-    // Erst nach der Prüfung steht fest, welcher Preis gilt.
-    if ((info.pending_discount_requests ?? 0) > 0) {
-      return NextResponse.json({ error: DISCOUNT_PENDING_MESSAGE, payment_state: "open" }, { status: 409 });
-    }
     let pricing = calculatePersonsPrice(info, info.persons);
     if (!pricing || pricing.totalCents === 0) {
       return NextResponse.json(
@@ -112,7 +105,6 @@ export async function POST(request: NextRequest) {
     }
     if (info.paid_at) throw new CheckoutBlockedError("Diese Anmeldung wurde bereits bezahlt.", "paid");
     if (blockedByCapacity(info)) throw new CheckoutBlockedError(EVENT_FULL_MESSAGE, "open");
-    if ((info.pending_discount_requests ?? 0) > 0) throw new CheckoutBlockedError(DISCOUNT_PENDING_MESSAGE, "open");
     pricing = calculatePersonsPrice(info, info.persons);
     if (!pricing || pricing.totalCents === 0) {
       throw new CheckoutBlockedError("Für diese Anmeldung ist keine Zahlung erforderlich. Die Bestätigung erfolgt durch das Team.", "open");

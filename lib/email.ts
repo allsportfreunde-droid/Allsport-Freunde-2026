@@ -5,7 +5,6 @@ import { WaitlistSpotOfferedEmail } from "@/emails/waitlist-spot-offered";
 import { WaitlistSpotFreedEmail } from "@/emails/waitlist-spot-freed";
 import { RegistrationApprovedEmail } from "@/emails/registration-approved";
 import { RegistrationRejectedEmail } from "@/emails/registration-rejected";
-import { DiscountDecisionEmail } from "@/emails/discount-decision";
 import { RegistrationCancelledEmail } from "@/emails/registration-cancelled";
 import { EventCancelledEmail } from "@/emails/event-cancelled";
 import { ContactReceivedEmail } from "@/emails/contact-received";
@@ -323,36 +322,6 @@ export async function sendRegistrationRejectedEmail(
     data.to,
     RegistrationRejectedEmail({
       firstName: data.firstName,
-      eventTitle: data.eventTitle,
-      eventDate: formatDateDE(data.eventDate),
-      eventTime: data.eventTime,
-      eventLocation: data.eventLocation,
-      statusUrl,
-      note: data.note,
-    })
-  );
-}
-
-/**
- * Ergebnis eines Ermäßigungsantrags. firstName ist die Empfängerin
- * (Hauptperson der Anmeldung), personName die Person mit dem Antrag.
- */
-export async function sendDiscountDecisionEmail(
-  data: Omit<EmailData, "persons"> & { approved: boolean; personName: string; percent: number; note?: string }
-) {
-  const statusUrl = `${appUrl}/status/${data.statusToken}`;
-  const subject = data.approved
-    ? `Ermäßigung bestätigt – ${data.eventTitle}`
-    : `Ermäßigung nicht bestätigt – ${data.eventTitle}`;
-
-  sendEmail(
-    subject,
-    data.to,
-    DiscountDecisionEmail({
-      approved: data.approved,
-      firstName: data.firstName,
-      personName: data.personName,
-      percent: data.percent,
       eventTitle: data.eventTitle,
       eventDate: formatDateDE(data.eventDate),
       eventTime: data.eventTime,

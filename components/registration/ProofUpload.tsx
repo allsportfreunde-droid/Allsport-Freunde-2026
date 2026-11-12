@@ -5,8 +5,9 @@ import { Loader2, Paperclip } from "lucide-react";
 import { PROOF_ACCEPT, proofFileError, uploadProof } from "./proofFile";
 
 /**
- * Nachweis nachreichen oder ersetzen – auf der Statusseite, solange über den
- * Antrag nicht entschieden ist. Lädt direkt nach der Auswahl hoch.
+ * Nachweis erneut auswählen, wenn der Upload direkt nach der Anmeldung
+ * gescheitert ist – nur in der Erfolgsansicht der Anmeldemaske. Später
+ * nachreichen lässt er sich nicht. Lädt direkt nach der Auswahl hoch.
  */
 export default function ProofUpload({
   statusToken,

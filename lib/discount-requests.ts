@@ -27,14 +27,17 @@ export interface DiscountRequestInput {
   remember: boolean;
 }
 
-/** Was Statusseite und Erfolgsansicht über einen Antrag erfahren – nie die Datei. */
+/**
+ * Was Statusseite und Erfolgsansicht über einen Antrag erfahren – nie die
+ * Datei und nie das Ergebnis der Prüfung (das klärt das Team persönlich).
+ */
 export interface DiscountRequestInfo {
   id: number;
   person_id: string;
   discount: Discount;
   status: DiscountRequestStatus;
+  /** Nachweis mit der Anmeldung eingereicht – dann gilt die Ermäßigung, sonst der reguläre Preis. */
   has_proof: boolean;
-  decision_note: string | null;
 }
 
 export const DISCOUNT_REQUEST_CONSENT_TEXT =
@@ -76,12 +79,13 @@ export function parseDiscountRequest(value: unknown): DiscountRequestInput | nul
   return { discount: discount as Discount, remember: remember === true };
 }
 
-/** Kurzer Statustext je Antrag für Statusseite und Erfolgsansicht. */
-export function discountRequestLabel(request: Pick<DiscountRequestInfo, "discount" | "status" | "has_proof">): string {
+/**
+ * Kurzer Statustext je Antrag für Statusseite und Erfolgsansicht. Ob das Team
+ * den Antrag schon angesehen hat, steht bewusst nicht darin.
+ */
+export function discountRequestLabel(request: Pick<DiscountRequestInfo, "discount" | "has_proof">): string {
   const percent = DISCOUNTS[request.discount].percent;
-  if (request.status === "approved") return `Ermäßigung −${percent} % bestätigt`;
-  if (request.status === "rejected") return `Ermäßigung −${percent} % nicht bestätigt – es gilt der reguläre Preis`;
   return request.has_proof
-    ? `Ermäßigung −${percent} % beantragt – wird geprüft`
-    : `Ermäßigung −${percent} % beantragt – Nachweis fehlt noch`;
+    ? `Ermäßigung −${percent} % · Nachweis eingereicht`
+    : `Ermäßigung −${percent} % beantragt – ohne Nachweis gilt der reguläre Preis`;
 }

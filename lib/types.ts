@@ -524,8 +524,6 @@ export interface CheckoutInfo extends Partial<Omit<EventStripeCatalog, "stripe_p
   person_count: number;
   child_count: number;
   persons: Array<{ id: string; is_child: boolean; discount?: Discount | null }>;
-  /** Offene Ermäßigungsanträge aktiver Personen – solange > 0, ist Bezahlen gesperrt. */
-  pending_discount_requests?: number;
 }
 
 /**

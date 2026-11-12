@@ -258,14 +258,16 @@ export default function RegistrationModal({
   // Nach dem Absenden zählt, was der Server entschieden hat.
   const onWaitlist = waitlisted ?? isFull;
 
-  // Erkannte Ermäßigung gilt sofort, beantragte vorbehaltlich der Prüfung.
+  // Erkannte Ermäßigung gilt sofort, beantragte mit dem hochgeladenen Nachweis.
   const pricedPersons = persons.map((p, idx) => ({
     is_child: p.isChild,
     discount: discountPreview[idx] ?? requestedDiscount(idx),
   }));
   const pricing = calculatePersonsPrice(event, pricedPersons);
   const totalPrice = pricing ? pricing.totalCents / 100 : null;
-  const anyRequested = persons.some((_, idx) => requestedDiscount(idx));
+  // Bezahlen erst, wenn alle Nachweise oben sind – erst dann gilt die beantragte Ermäßigung.
+  const proofsUploaded =
+    requestCount === 0 || (uploadState != null && !uploadState.running && uploadState.failed.length === 0);
   // Ermäßigen lässt sich nur, wo es einen verbindlichen Preis gibt.
   const discountsAvailable = calculateTierPrices(event) != null;
   // Hinweis je Person nur, wenn es tatsächlich etwas zu ermäßigen gibt.
@@ -338,7 +340,12 @@ export default function RegistrationModal({
                   : "Du erhältst eine E-Mail, sobald deine Anmeldung bestätigt wurde."}
             </p>
             {requestCount > 0 && (
-              <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 mb-4 text-left text-sm text-amber-900 space-y-2" aria-live="polite">
+              <div
+                className={`border rounded-lg p-4 mb-4 text-left text-sm space-y-2 ${
+                  proofsUploaded ? "border-green-200 bg-green-50 text-green-900" : "border-amber-200 bg-amber-50 text-amber-900"
+                }`}
+                aria-live="polite"
+              >
                 <p className="font-semibold">
                   {requestCount === 1 ? "Ermäßigung beantragt" : `${requestCount} Ermäßigungen beantragt`}
                 </p>
@@ -349,7 +356,10 @@ export default function RegistrationModal({
                   </p>
                 ) : uploadState && uploadState.failed.length > 0 ? (
                   <>
-                    <p>Mindestens ein Nachweis konnte nicht hochgeladen werden. Bitte wähle ihn hier direkt erneut aus:</p>
+                    <p>
+                      Mindestens ein Nachweis konnte nicht hochgeladen werden. Bitte wähle ihn hier direkt erneut aus –
+                      später nachreichen geht nicht, ohne Nachweis gilt der reguläre Preis.
+                    </p>
                     <div className="space-y-3">
                       {uploadState.failed.map(({ name, requestId, error: uploadError }) => (
                         <div key={requestId} className="rounded-md border border-amber-200 bg-white/70 p-2.5 space-y-2">
@@ -370,16 +380,11 @@ export default function RegistrationModal({
                     </div>
                   </>
                 ) : (
-                  <p>Wir prüfen deinen Nachweis. Danach kannst du bezahlen – du bekommst eine E-Mail.</p>
-                )}
-                {pricing && pricing.totalCents > 0 && (
-                  <div className="pt-1">
-                    <PriceSummary pricing={pricing} note="Ermäßigung vorbehaltlich der Prüfung" />
-                  </div>
+                  <p>{requestCount === 1 ? "Nachweis" : "Nachweise"} hochgeladen ✓ – die Ermäßigung ist eingerechnet.</p>
                 )}
               </div>
             )}
-            {statusToken && totalPrice != null && totalPrice > 0 && !onWaitlist && requestCount === 0 && (
+            {statusToken && totalPrice != null && totalPrice > 0 && !onWaitlist && proofsUploaded && (
               <div className="border border-gray-200 rounded-lg p-4 mb-4 text-left">
                 <p className="text-sm font-semibold text-gray-900">
                   Anmeldung bestätigen
@@ -685,10 +690,7 @@ export default function RegistrationModal({
               {/* Kosten */}
               <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
                 {pricing ? (
-                  <PriceSummary
-                    pricing={pricing}
-                    note={anyRequested ? "Ermäßigung vorbehaltlich der Prüfung" : undefined}
-                  />
+                  <PriceSummary pricing={pricing} />
                 ) : (
                   <div className="flex items-center justify-between gap-3">
                     <span className="flex items-center gap-2 text-sm text-gray-600">

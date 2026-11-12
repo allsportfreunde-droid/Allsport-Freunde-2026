@@ -159,8 +159,9 @@ export async function POST(request: NextRequest) {
     }));
 
     // Ermäßigungsanträge: nur für Personen, die nicht schon erkannt wurden.
-    // Die Ermäßigung gilt erst nach der Prüfung (lib/db/discount-requests.ts) –
-    // bis dahin bleibt `discount` leer und das Bezahlen gesperrt.
+    // Auf Vertrauen: Die Ermäßigung gilt, sobald das Formular direkt nach der
+    // Anmeldung den Nachweis hochgeladen hat (saveDiscountProof). Ein späteres
+    // Nachreichen gibt es nicht – ohne Nachweis bleibt es beim regulären Preis.
     const discountRequests = persons.map((p, index) =>
       registeredPersons[index].discount ? null : parseDiscountRequest(p.discountRequest)
     );
@@ -202,7 +203,7 @@ export async function POST(request: NextRequest) {
       `;
       createdRequests.push({ person_index: index, id: (requestRows[0] as { id: number }).id });
     }
-    // Für Preisvorschau und Mail: beantragte Ermäßigungen schon einrechnen – vorbehaltlich der Prüfung.
+    // Für die Mail: beantragte Ermäßigungen schon einrechnen – der Nachweis folgt direkt danach.
     const previewPersons = registeredPersons.map((p, index) => ({
       ...p,
       discount: p.discount ?? discountRequests[index]?.discount ?? null,
@@ -232,9 +233,7 @@ export async function POST(request: NextRequest) {
       const priceLabel = formatPersonsPriceLabel(event, previewPersons);
       sendRegistrationReceivedEmail({
         ...emailData,
-        priceLabel: priceLabel
-          ? createdRequests.length > 0 ? `${priceLabel} (vorbehaltlich der Prüfung deiner Ermäßigung)` : priceLabel
-          : undefined,
+        priceLabel: priceLabel ?? undefined,
         cancellationLabel: deadline ? formatDeadline(deadline) : undefined,
       });
     }

@@ -14,6 +14,13 @@ describe("Ermäßigungshinweis im Anmeldeformular", () => {
     expect(html).not.toContain("Behinderung");
   });
 
+  it("zeigt eine beantragte Ermäßigung ohne Zusatztext", () => {
+    const html = renderToStaticMarkup(<DiscountNotice discount="reduced_30" fullCents={1000} reducedCents={700} pending />);
+    expect(html).toContain("Ermäßigung −30 % beantragt");
+    expect(html).not.toContain("Nachweis");
+    expect(html).not.toContain("geprüft");
+  });
+
   it("bleibt ohne Ermäßigung leer", () => {
     const html = renderToStaticMarkup(<DiscountNotice discount={null} fullCents={null} reducedCents={null} />);
     expect(html).toBe('<div aria-live="polite"></div>');

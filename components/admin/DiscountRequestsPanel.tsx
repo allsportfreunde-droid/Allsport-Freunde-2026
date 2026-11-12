@@ -29,8 +29,10 @@ const STATUS_LABELS = {
 type Decision = { request: AdminDiscountRequest; decision: "approve" | "reject" };
 
 /**
- * Ermäßigungsanträge aus der Anmeldung prüfen. Der Nachweis öffnet sich in
- * einem neuen Tab und wird mit der Entscheidung gelöscht.
+ * Ermäßigungsanträge aus der Anmeldung prüfen – auf Vertrauen: Mit dem
+ * Nachweis gilt die Ermäßigung sofort, die Person kann gleich bezahlen.
+ * Die Prüfung hier ist nur ein Vermerk, es geht keine Mail raus. Der
+ * Nachweis öffnet sich in einem neuen Tab und wird mit der Entscheidung gelöscht.
  */
 export default function DiscountRequestsPanel({
   onPendingCount,
@@ -93,11 +95,9 @@ export default function DiscountRequestsPanel({
         toast(data.error || "Entscheidung konnte nicht gespeichert werden.", "error");
         return;
       }
-      const parts = [decision.decision === "approve" ? "Ermäßigung bestätigt" : "Antrag abgelehnt"];
+      const parts = [decision.decision === "approve" ? "Ermäßigung bestätigt" : "Antrag abgelehnt – bitte persönlich klären"];
       if (data.remembered) parts.push("in die Liste übernommen");
-      if (data.mailed) parts.push("E-Mail verschickt");
-      if (decision.decision === "approve" && !data.applied) parts.push("Achtung: Anmeldung war schon bezahlt, Preis unverändert");
-      toast(parts.join(" · "), data.applied === false && decision.decision === "approve" ? "error" : "success");
+      toast(parts.join(" · "), "success");
       setDecision(null);
       if (data.remembered) onListChanged();
       await load();
@@ -112,6 +112,7 @@ export default function DiscountRequestsPanel({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-gray-600">
+          Mit Nachweis gilt die Ermäßigung sofort – hier wird nur noch geprüft, ohne E-Mail an die Person.
           Nachweise werden nach der Entscheidung gelöscht, spätestens nach {PROOF_RETENTION_DAYS} Tagen.
         </p>
         <div className="flex items-center gap-1.5" role="group" aria-label="Anträge filtern">
@@ -192,7 +193,7 @@ export default function DiscountRequestsPanel({
                 ) : r.proof_deleted_at ? (
                   <span className="text-gray-500">gelöscht</span>
                 ) : (
-                  <span className="text-amber-700">fehlt noch</span>
+                  <span className="text-gray-500">nicht eingereicht · regulärer Preis</span>
                 ),
             },
             {
@@ -206,7 +207,9 @@ export default function DiscountRequestsPanel({
                   <p className="text-xs text-gray-500 mt-0.5">
                     {r.decided_at ? `${formatDay(r.decided_at)} · ${r.decided_by ?? ""}` : `seit ${formatDay(r.created_at)}`}
                   </p>
+                  <p className="text-xs text-gray-500">{r.paid ? "bezahlt" : "noch nicht bezahlt"}</p>
                   {r.remember && <p className="text-xs text-gray-500">für künftige Anmeldungen merken</p>}
+                  {r.decision_note && <p className="text-xs text-gray-500 italic wrap-break-word">Notiz: {r.decision_note}</p>}
                 </div>
               ),
             },
@@ -218,8 +221,8 @@ export default function DiscountRequestsPanel({
                   size="sm"
                   className="bg-green-600 hover:bg-green-700"
                   onClick={() => openDecision(r, "approve")}
-                  disabled={!r.has_proof}
-                  title={!r.has_proof ? "Ein hinterlegter Nachweis ist für die Bestätigung erforderlich." : undefined}
+                  disabled={!r.proof_uploaded}
+                  title={!r.proof_uploaded ? "Ohne eingereichten Nachweis lässt sich nichts bestätigen." : undefined}
                 >
                   <Check className="w-4 h-4 mr-1" /> Bestätigen
                 </Button>
@@ -243,21 +246,21 @@ export default function DiscountRequestsPanel({
                   {decision.request.last_name}.{" "}
                   {decision.decision === "approve"
                     ? decision.request.remember
-                      ? "Die Person wird außerdem in die Ermäßigungsliste übernommen."
-                      : "Gilt nur für diese Anmeldung."
-                    : "Es gilt dann der reguläre Preis."}{" "}
-                  Der Nachweis wird gelöscht, die Person bekommt eine E-Mail.
+                      ? "Die Ermäßigung gilt bereits. Die Person wird außerdem in die Ermäßigungsliste übernommen."
+                      : "Die Ermäßigung gilt bereits, nur für diese Anmeldung."
+                    : "Am Preis ändert sich nichts und die Person erfährt nichts davon – bitte persönlich klären."}{" "}
+                  Der Nachweis wird gelöscht.
                 </>
               )}
             </DialogDescription>
           </DialogHeader>
-          {decision && !decision.request.has_proof && decision.decision === "approve" && (
+          {decision && !decision.request.proof_uploaded && decision.decision === "approve" && (
             <p className="text-sm text-amber-700 bg-amber-50 rounded-lg p-3 mb-3">
-              Zu diesem Antrag liegt kein Nachweis vor. Eine Bestätigung ist erst nach dem Upload möglich.
+              Zu diesem Antrag wurde kein Nachweis eingereicht – es gilt der reguläre Preis.
             </p>
           )}
           <div className="space-y-1.5">
-            <Label htmlFor="decision_note">Hinweis an die Person (optional)</Label>
+            <Label htmlFor="decision_note">Interne Notiz (optional)</Label>
             <Textarea
               id="decision_note"
               rows={3}
@@ -266,13 +269,13 @@ export default function DiscountRequestsPanel({
               onChange={(e) => setNote(e.target.value)}
               placeholder={decision?.decision === "reject" ? "z. B. Bescheid war nicht mehr gültig" : ""}
             />
-            <p className="text-xs text-muted-foreground">Erscheint in der E-Mail. Keine Diagnosen eintragen.</p>
+            <p className="text-xs text-muted-foreground">Nur für das Team sichtbar. Keine Diagnosen eintragen.</p>
           </div>
           <div className="flex justify-end gap-2 mt-4">
             <Button variant="outline" onClick={() => setDecision(null)} disabled={deciding}>Abbrechen</Button>
             <Button
               onClick={() => void submitDecision()}
-              disabled={deciding || (decision?.decision === "approve" && !decision.request.has_proof)}
+              disabled={deciding || (decision?.decision === "approve" && !decision.request.proof_uploaded)}
               className={decision?.decision === "approve" ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700 text-white"}
             >
               {deciding && <Loader2 className="w-4 h-4 animate-spin mr-2" />}

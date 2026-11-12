@@ -14,9 +14,8 @@ export interface WaitlistRecipient {
  * unbezahlten Anmeldungen des Events – egal, ob sie sich vor oder nach dem
  * Ausbuchen eingetragen haben, gesperrt sind sie jetzt alle gleich.
  *
- * Ausgenommen: offene Ermäßigungsanträge (dürfen noch nicht zahlen und
- * bekommen ohnehin die Entscheidungsmail) und Anmeldungen, deren Zahlung
- * gerade geprüft wird oder als SEPA-Einzug läuft.
+ * Ausgenommen: Anmeldungen, deren Zahlung gerade geprüft wird oder als
+ * SEPA-Einzug läuft.
  */
 export async function getWaitlistRecipients(eventId: number): Promise<WaitlistRecipient[]> {
   if (!isPostgresConfigured()) return [];
@@ -37,9 +36,6 @@ export async function getWaitlistRecipients(eventId: number): Promise<WaitlistRe
       AND r.status_token IS NOT NULL
       AND EXISTS (SELECT 1 FROM registration_persons rp
         WHERE rp.registration_id = r.id AND rp.cancelled_at IS NULL)
-      AND NOT EXISTS (SELECT 1 FROM discount_requests dr
-        JOIN registration_persons rp ON rp.id = dr.person_id
-        WHERE dr.registration_id = r.id AND dr.status = 'pending' AND rp.cancelled_at IS NULL)
       AND NOT EXISTS (SELECT 1 FROM checkout_pricing cp
         WHERE cp.registration_id = r.id AND cp.payment_state IN ('processing', 'paid', 'checking'))
     ORDER BY r.created_at ASC
