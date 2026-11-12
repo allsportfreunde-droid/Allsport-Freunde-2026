@@ -2,7 +2,7 @@ import { Resend } from "resend";
 import { RegistrationReceivedEmail } from "@/emails/registration-received";
 import { WaitlistReceivedEmail } from "@/emails/waitlist-received";
 import { WaitlistSpotOfferedEmail } from "@/emails/waitlist-spot-offered";
-import { WaitlistMovedEmail } from "@/emails/waitlist-moved";
+import { WaitlistSpotFreedEmail } from "@/emails/waitlist-spot-freed";
 import { RegistrationApprovedEmail } from "@/emails/registration-approved";
 import { RegistrationRejectedEmail } from "@/emails/registration-rejected";
 import { RegistrationCancelledEmail } from "@/emails/registration-cancelled";
@@ -11,7 +11,7 @@ import { ContactReceivedEmail } from "@/emails/contact-received";
 import { ContactAdminEmail } from "@/emails/contact-admin";
 import { ContactResponseEmail } from "@/emails/contact-response";
 import { ReminderEmail } from "@/emails/reminder";
-import { SurveyEmail } from "@/emails/survey";
+import { ReviewRequestEmail } from "@/emails/review-request";
 import { RefundDueAdminEmail } from "@/emails/refund-due-admin";
 import { formatEuro } from "@/lib/finance";
 import { render } from "@react-email/components";
@@ -101,7 +101,7 @@ export async function sendRegistrationReceivedEmail(
   );
 }
 
-export async function sendWaitlistReceivedEmail(data: EmailData) {
+export async function sendWaitlistReceivedEmail(data: EmailData & { paid?: boolean }) {
   const statusUrl = `${appUrl}/status/${data.statusToken}`;
   const subject = `Du stehst auf der Warteliste – ${data.eventTitle}`;
 
@@ -116,28 +116,35 @@ export async function sendWaitlistReceivedEmail(data: EmailData) {
       eventLocation: data.eventLocation,
       statusUrl,
       persons: data.persons,
+      paid: data.paid,
     })
   );
 }
 
-/** Das Team hat eine unbezahlte Anmeldung zurück auf die Warteliste gesetzt. */
-export async function sendWaitlistMovedEmail(data: EmailData) {
-  const statusUrl = `${appUrl}/status/${data.statusToken}`;
-  const subject = `Du stehst jetzt auf der Warteliste – ${data.eventTitle}`;
-
-  sendEmail(
-    subject,
-    data.to,
-    WaitlistMovedEmail({
+/**
+ * Durch eine Stornierung ist wieder ein Platz frei. Geht an alle offenen,
+ * unbezahlten Anmeldungen zugleich (siehe lib/waitlist.ts) – den Platz
+ * bekommt, wer zuerst bezahlt. Als Batch-Nachricht gebaut, damit eine lange
+ * Warteliste nicht ins Rate-Limit des Versanddienstes läuft.
+ */
+export async function buildWaitlistSpotFreedEmail(
+  data: EmailData & { priceLabel: string }
+): Promise<EmailBatchMessage> {
+  return {
+    from: fromEmail,
+    to: data.to,
+    subject: `Ein Platz ist frei geworden – ${data.eventTitle}`,
+    html: await render(WaitlistSpotFreedEmail({
       firstName: data.firstName,
       eventTitle: data.eventTitle,
       eventDate: formatDateDE(data.eventDate),
       eventTime: data.eventTime,
       eventLocation: data.eventLocation,
-      statusUrl,
+      statusUrl: `${appUrl}/status/${data.statusToken}`,
       persons: data.persons,
-    })
-  );
+      priceLabel: data.priceLabel,
+    })),
+  };
 }
 
 /**
@@ -325,29 +332,6 @@ export async function sendRegistrationRejectedEmail(
   );
 }
 
-// ─── Survey Email ────────────────────────────────────────
-
-export async function sendEventSurveyEmail(data: {
-  to: string;
-  firstName: string;
-  eventTitle: string;
-  eventDate: string;
-  surveyUrl: string;
-}) {
-  const subject = `Wie war das Event? Dein Feedback zu ${data.eventTitle}`;
-
-  sendEmail(
-    subject,
-    data.to,
-    SurveyEmail({
-      firstName: data.firstName,
-      eventTitle: data.eventTitle,
-      eventDate: formatDateDE(data.eventDate),
-      surveyUrl: data.surveyUrl,
-    })
-  );
-}
-
 // ─── Contact Emails ──────────────────────────────────────
 
 export async function sendContactReceivedEmail(data: {
@@ -437,4 +421,61 @@ export async function sendEventReminderEmail(data: {
       cancelUrl,
     })
   );
+}
+
+// ─── Review-E-Mails ──────────────────────────────────────
+
+export interface EmailBatchMessage {
+  from: string;
+  to: string;
+  subject: string;
+  html: string;
+}
+
+export async function buildReviewRequestEmail(data: {
+  to: string;
+  firstName: string;
+  eventTitle: string;
+  eventDate: string;
+  statusToken: string;
+  deadline: Date;
+  isReminder: boolean;
+}): Promise<EmailBatchMessage> {
+  const subject = data.isReminder
+    ? `Erinnerung: Wie war „${data.eventTitle}“?`
+    : `Wie war „${data.eventTitle}“? Bewerte mit einem Klick`;
+  const dateFormat = new Intl.DateTimeFormat("de-DE", {
+    timeZone: "Europe/Berlin", weekday: "long", day: "numeric", month: "long", year: "numeric",
+  });
+  return {
+    from: fromEmail, to: data.to, subject,
+    html: await render(ReviewRequestEmail({
+      firstName: data.firstName, eventTitle: data.eventTitle, eventDate: dateFormat.format(new Date(data.eventDate)),
+      reviewUrl: `${appUrl}/review/${data.statusToken}`, deadlineDate: dateFormat.format(data.deadline), isReminder: data.isReminder,
+    })),
+  };
+}
+
+export async function sendEmailBatch(messages: EmailBatchMessage[], idempotencyKey: string): Promise<boolean> {
+  if (messages.length > 100) throw new Error("Ein E-Mail-Batch darf höchstens 100 Nachrichten enthalten.");
+  if (messages.length === 0) return true;
+  if (!resend) {
+    for (const message of messages) {
+      console.log(`[Email] An: ${message.to}`);
+      console.log(`[Email] Betreff: ${message.subject}`);
+      console.log("[Email] (RESEND_API_KEY nicht gesetzt – E-Mail nur geloggt)");
+    }
+    return true;
+  }
+  try {
+    const result = await resend.batch.send(messages, { idempotencyKey });
+    if (result.error || !result.data) {
+      console.error("[Email] Batch-Versand wurde vom Versanddienst nicht bestätigt:", result.error);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.error("[Email] Fehler beim Batch-Versand:", error);
+    return false;
+  }
 }

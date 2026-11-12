@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import { X, Loader2, User, Users, Calendar, CheckCircle2, Info, Euro, ExternalLink } from "lucide-react";
 import StatusBadge from "@/components/status/StatusBadge";
 import ChildBadge from "@/components/ChildBadge";
+import DiscountBadge from "@/components/DiscountBadge";
 import PaidBadge from "@/components/PaidBadge";
+import PersonDiscountSelect from "@/components/admin/PersonDiscountSelect";
 import type { RegistrationDetail } from "@/lib/types";
 import { formatEuro } from "@/lib/finance";
 
@@ -14,6 +17,8 @@ interface Props {
   loading: boolean;
   data: RegistrationDetail | null;
   error?: string | null;
+  /** Geänderte Daten (etwa eine nachträglich gesetzte Ermäßigung). Ohne: nur Anzeige. */
+  onChange?: (data: RegistrationDetail) => void;
 }
 
 function formatDateTime(iso: string | null): string {
@@ -84,6 +89,7 @@ export default function RegistrationDetailModal({
   loading,
   data,
   error,
+  onChange,
 }: Props) {
   useEffect(() => {
     if (!open) return;
@@ -107,8 +113,18 @@ export default function RegistrationDetailModal({
 
   if (!open) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-6">
+  // Ermäßigung nachträglich nur, solange nichts bezahlt ist – danach steht der Betrag fest.
+  const discountEditable = !!data && !!onChange && !!data.discount_available && data.paid_at == null;
+
+  const modal = (
+    // React reicht Ereignisse auch über ein Portal an die Elternkomponenten
+    // weiter – ohne das Stoppen hier würde jeder Klick ins Modal die Zeile
+    // in der Anmeldeliste markieren.
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-6"
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-black/50 backdrop-blur-sm"
@@ -178,6 +194,9 @@ export default function RegistrationDetailModal({
                           {person.is_child && (
                             <ChildBadge className="ml-1.5 align-middle" />
                           )}
+                          {person.discount && (
+                            <DiscountBadge discount={person.discount} className="ml-1.5 align-middle" />
+                          )}
                           {idx === 0 && (
                             <span className="ml-1.5 text-xs text-gray-400 font-normal">
                               (Hauptperson)
@@ -188,6 +207,20 @@ export default function RegistrationDetailModal({
                           <p className="text-xs text-green-700 mt-0.5">
                             Eingecheckt · {formatDateTime(person.checked_in_at)}
                           </p>
+                        )}
+                        {discountEditable && !person.cancelled_at && (
+                          <PersonDiscountSelect
+                            registrationId={data.id}
+                            personId={person.id}
+                            personName={`${person.first_name} ${person.last_name}`}
+                            value={person.discount ?? null}
+                            onSaved={(discount) =>
+                              onChange?.({
+                                ...data,
+                                persons: data.persons.map((p) => (p.id === person.id ? { ...p, discount } : p)),
+                              })
+                            }
+                          />
                         )}
                       </div>
                       {person.checked_in_at ? (
@@ -208,6 +241,16 @@ export default function RegistrationDetailModal({
                       Keine Personen vorhanden
                     </span>
                   </div>
+                )}
+                {discountEditable && (
+                  <p className="py-2 text-xs text-gray-500">
+                    Eine Ermäßigung gilt sofort für die nächste Zahlung. Offene Zahlungslinks werden geschlossen.
+                  </p>
+                )}
+                {data.discount_available && data.paid_at != null && (
+                  <p className="py-2 text-xs text-gray-500">
+                    Bereits bezahlt – Ermäßigung nicht mehr änderbar. Eine Differenz bitte von Hand in Stripe erstatten.
+                  </p>
                 )}
               </Section>
 
@@ -425,4 +468,8 @@ export default function RegistrationDetailModal({
       </div>
     </div>
   );
+
+  // Ins body rendern: Sonst sitzt das Modal in der Tabellenzeile des Buttons
+  // und erbt deren Stile (select-none, cursor-pointer).
+  return typeof document === "undefined" ? modal : createPortal(modal, document.body);
 }

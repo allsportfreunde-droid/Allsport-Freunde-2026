@@ -1,4 +1,5 @@
-import { updateRegistrationStatus, getRegistrationWithEvent, getEvent } from "@/lib/db";
+import { updateRegistrationStatus, getRegistrationWithEvent, getEvent, isEventFull } from "@/lib/db";
+import { onCapacityChanged } from "@/lib/waitlist";
 import {
   sendRegistrationApprovedEmail,
   sendRegistrationRejectedEmail,
@@ -33,7 +34,10 @@ export async function PATCH(
       );
     }
 
+    // Bestätigen kann das Event füllen, Ablehnen/Zurücksetzen einen Platz freimachen.
+    const wasFull = await isEventFull(regBefore.event_id);
     const result = await updateRegistrationStatus(regId, status, note);
+    if (result?.status_changed) await onCapacityChanged(regBefore.event_id, wasFull);
     if (!result) {
       return NextResponse.json(
         { error: "Fehler beim Aktualisieren." },

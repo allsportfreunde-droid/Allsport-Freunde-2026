@@ -1,5 +1,7 @@
-import { deleteRegistration, getRefundDue, getRegistrationDetail, getCheckoutAdminNotices } from "@/lib/db";
+import { deleteRegistration, getEvent, getRefundDue, getRegistrationDetail, getCheckoutAdminNotices, getRegistrationEventId, isEventFull } from "@/lib/db";
 import { stripePaymentUrl } from "@/lib/stripe";
+import { calculateTierPrices } from "@/lib/price-tiers";
+import { onCapacityChanged } from "@/lib/waitlist";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(
@@ -14,10 +16,12 @@ export async function GET(
     }
     const refundDue = await getRefundDue(Number(id));
     const notices = await getCheckoutAdminNotices(Number(id));
+    const event = await getEvent(registration.event_id);
     return NextResponse.json({
       ...registration,
       stripe_dashboard_url: stripePaymentUrl(registration.stripe_payment_intent_id),
       refund_due: refundDue.amount > 0 ? refundDue : null,
+      discount_available: event != null && calculateTierPrices(event) != null,
       checkout_notices: notices.map(notice => ({ ...notice,
         stripe_url: stripePaymentUrl(notice.payment_intent_id as string | null) })),
     });
@@ -33,7 +37,11 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
+    // Löschen einer bestätigten Anmeldung kann einen Platz freimachen.
+    const eventId = await getRegistrationEventId(Number(id));
+    const wasFull = eventId ? await isEventFull(eventId) : false;
     await deleteRegistration(Number(id));
+    if (eventId) await onCapacityChanged(eventId, wasFull);
     return NextResponse.json({ message: "Anmeldung gelöscht!" });
   } catch (error) {
     console.error("Fehler beim Löschen der Anmeldung:", error);

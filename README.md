@@ -42,30 +42,46 @@ Die App läuft dann unter [http://localhost:3000](http://localhost:3000).
    npx vercel env pull .env.local
    ```
 
-5. **Tabellen erstellen:**
+5. **Tabellen erstellen:** siehe [Datenbank-Migrationen](#datenbank-migrationen)
    ```bash
-   npx tsx scripts/setup-db.ts
+   npm run db:migrate
    ```
 
-6. **Seed-Daten einfügen:**
-   ```bash
-   npx tsx scripts/seed.ts
-   ```
+6. **Supabase-Variablen setzen:** `NEXT_PUBLIC_SUPABASE_URL` und `NEXT_PUBLIC_SUPABASE_ANON_KEY` im Vercel-Dashboard hinterlegen (siehe Abschnitt „Supabase Setup").
 
-7. **Supabase-Variablen setzen:** `NEXT_PUBLIC_SUPABASE_URL` und `NEXT_PUBLIC_SUPABASE_ANON_KEY` im Vercel-Dashboard hinterlegen (siehe Abschnitt „Supabase Setup").
+7. **Deployen:** `git push` – Vercel baut automatisch
 
-8. **Bei Upgrade von NextAuth:** Alte `admin_users`-Tabelle entfernen:
-   ```bash
-   npm run db:migrate-drop-admin-users
-   ```
-
-9. **Deployen:** `git push` – Vercel baut automatisch
-
-10. **Cron-Job aktivieren (Erinnerungsmails):**
+8. **Cron-Job aktivieren (Erinnerungsmails):**
    - Erzeuge ein sicheres Secret: `openssl rand -base64 32`
    - Vercel-Dashboard → Project Settings → Environment Variables → `CRON_SECRET` setzen
    - Der Job läuft täglich um 08:00 UTC (09:00 MEZ / 10:00 MESZ) und sendet Erinnerungsmails an alle bestätigten Teilnehmer, deren Event am nächsten Tag stattfindet
    - Logs: Vercel-Dashboard → Logs → Cron
+
+## Datenbank-Migrationen
+
+Das Schema entsteht aus nummerierten SQL-Dateien in `db/migrations/`. Welche schon eingespielt sind, steht in der Tabelle `schema_migrations` – ein Befehl bringt jede Datenbank auf den aktuellen Stand, egal wie alt sie ist.
+
+```bash
+npm run db:status                                   # nur anzeigen, was offen ist
+npm run db:migrate                                  # offene Migrationen einspielen (.env)
+npm run db:migrate -- --env-file .env.production    # andere Datenbank
+npm run db:migrate -- --yes                         # ohne Rückfrage, z. B. in CI
+```
+
+- Die Ziel-Datenbank steht immer in der ersten Zeile der Ausgabe. Bei einer Datenbank, die nicht lokal läuft, muss mit `ja` bestätigt werden.
+- Verwendet wird `POSTGRES_URL_NON_POOLING` bzw. `DATABASE_URL_UNPOOLED`, sonst `POSTGRES_URL` / `DATABASE_URL`.
+- Jede Datei läuft in einer eigenen Transaktion. Schlägt sie fehl, wird sie vollständig zurückgerollt und nicht eingetragen.
+
+**Neue Schema-Änderung:** neue Datei mit der nächsten Nummer anlegen, z. B. `db/migrations/0029_kurzer-name.sql`. Kein npm-Skript nötig.
+
+- Eine bereits eingespielte Datei wird **nie** mehr geändert – der Runner erkennt das an der Prüfsumme und bricht ab. Korrekturen kommen in eine neue Datei.
+- Kein `BEGIN`/`COMMIT` in der Datei und kein `CREATE INDEX CONCURRENTLY` (läuft nicht in einer Transaktion).
+- Möglichst wiederholbar schreiben (`IF NOT EXISTS`, `IF EXISTS`).
+- `npm test` spielt alle Migrationen gegen ein In-Memory-Postgres (PGlite) ein – Syntaxfehler fallen dort auf.
+
+**Vor dem Einspielen auf Prod** empfiehlt sich ein Probelauf auf einem Neon-Branch der Prod-Datenbank: Branch in Neon anlegen, dessen URL in eine eigene Env-Datei schreiben, `npm run db:migrate -- --env-file <datei>` ausführen und die App dagegen testen. Klappt das, denselben Befehl mit der Prod-URL.
+
+Einmalige Datenkorrekturen liegen in `scripts/oneoff/` und werden bei Bedarf direkt mit `npx tsx scripts/oneoff/<skript>.ts` gestartet.
 
 ## Admin-Bereich
 
@@ -113,6 +129,16 @@ Funktionen:
 - Smooth Scrolling und dezente Scroll-Animationen
 - Komplett auf Deutsch
 - Admin-Bereich mit Magic-Link-Login, Dashboard, Event- und Anmeldungsverwaltung
+
+## Event-Reviews
+
+Im Check-in-Dashboard wird die Review-Anfrage ab dem Event-Tag im Tab „Review“ manuell an eingecheckte Anmeldungen mit E-Mail versendet; später Eingecheckte können per „Nachsenden“ erreicht werden.
+Teilnehmer bewerten über den Link in der E-Mail und können ihre Antworten innerhalb von 14 Tagen ändern.
+Unter Admin → Reviews gibt der Vorstand Kommentare mit Einwilligung für die Homepage frei und kann die Freigabe jederzeit zurücknehmen.
+
+Vor dem Deployment `npm run db:migrate` auf der jeweiligen Datenbank ausführen (siehe [Datenbank-Migrationen](#datenbank-migrationen)).
+
+Reviews benötigen eine Postgres-Datenbank (`POSTGRES_URL`). Für den E-Mail-Versand müssen `RESEND_API_KEY` und `NEXT_PUBLIC_APP_URL` gesetzt sein: Ohne API-Schlüssel werden E-Mails nur protokolliert und als versendet gezählt; ohne `NEXT_PUBLIC_APP_URL` zeigen die Links in den E-Mails auf `http://localhost:3000`.
 
 ## API-Endpunkte
 
@@ -184,8 +210,11 @@ Funktionen:
   types.ts                       # TypeScript Typen
   utils.ts                       # Hilfsfunktionen
 middleware.ts                    # Schützt /admin/* (Redirect) und /api/admin/* (401)
+/db
+  /migrations                    # Schema als nummerierte SQL-Dateien (npm run db:migrate)
+  migrator.ts                    # Spielt offene Migrationen ein, Buchführung in schema_migrations
 /scripts
-  setup-db.ts                    # Erstellt Tabellen
-  migrate-drop-admin-users.ts    # Entfernt die alte NextAuth admin_users Tabelle
-  seed.ts                        # Fügt Beispiel-Events ein
+  migrate.ts                     # Kommandozeile für db:migrate / db:status
+  sync-stripe-catalog.ts         # Stripe-Produkte und Preise abgleichen
+  /oneoff                        # Einmalige Datenkorrekturen
 ```

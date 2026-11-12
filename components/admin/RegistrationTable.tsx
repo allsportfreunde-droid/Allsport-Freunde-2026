@@ -18,7 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/components/ui/toast";
 import StatusBadge from "@/components/status/StatusBadge";
 import ChildBadge from "@/components/ChildBadge";
-import { Trash2, Loader2, Search, Download, CheckCircle2, XCircle, Clock, Mail, X, Hourglass } from "lucide-react";
+import { Trash2, Loader2, Search, Download, CheckCircle2, XCircle, Clock, X } from "lucide-react";
 import RegistrationDetailButton from "@/components/RegistrationDetailButton";
 import type { RegistrationWithEvent, RegistrationStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -39,20 +39,7 @@ const PAGE_SIZE = 25;
 /** Was mit der aktuellen Auswahl passieren soll. */
 type BulkOp =
   | { kind: "status"; status: RegistrationStatus }
-  | { kind: "offer" }
-  | { kind: "waitlist" }
   | { kind: "delete" };
-
-/** Nur Wartelisten-Anmeldungen kann man einen Platz anbieten. */
-const isOfferable = (r: RegistrationWithEvent) =>
-  r.status === "pending" && !!r.is_waitlist;
-
-/**
- * Nur offene Anmeldungen mit Platz lassen sich auf die Warteliste setzen.
- * Bereits bezahlte lehnt der Server ab.
- */
-const isDemotable = (r: RegistrationWithEvent) =>
-  r.status === "pending" && !r.is_waitlist;
 
 export default function RegistrationTable({
   eventId,
@@ -77,65 +64,6 @@ export default function RegistrationTable({
   const [statusTarget, setStatusTarget] = useState<{ reg: RegistrationWithEvent; status: RegistrationStatus } | null>(null);
   const [statusNote, setStatusNote] = useState("");
   const [statusProcessing, setStatusProcessing] = useState(false);
-  const [offeringId, setOfferingId] = useState<number | null>(null);
-  const [waitlistTarget, setWaitlistTarget] = useState<RegistrationWithEvent | null>(null);
-  const [movingToWaitlist, setMovingToWaitlist] = useState(false);
-
-  /**
-   * Bietet einer Wartelisten-Anmeldung einen frei gewordenen Platz an: das
-   * Wartelisten-Flag fällt weg, der Status bleibt ausstehend. Die Anmeldung
-   * wird damit zahlbar und bekommt eine E-Mail.
-   */
-  const handleOfferSpot = async (reg: RegistrationWithEvent) => {
-    setOfferingId(reg.id);
-    try {
-      const res = await fetch("/api/checkin/waitlist/offer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ registrationId: reg.id }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        toast(data.error ?? "Platz konnte nicht angeboten werden.", "error");
-        return;
-      }
-      toast("Platz angeboten – E-Mail ist unterwegs.", "success");
-      fetchRegistrations();
-    } catch {
-      toast("Netzwerkfehler.", "error");
-    } finally {
-      setOfferingId(null);
-    }
-  };
-
-  /**
-   * Setzt eine offene, unbezahlte Anmeldung zurück auf die Warteliste. Der
-   * Platz wird wieder frei, die Anmeldung ist nicht mehr zahlbar und bekommt
-   * eine E-Mail.
-   */
-  const handleMoveToWaitlist = async () => {
-    if (!waitlistTarget) return;
-    setMovingToWaitlist(true);
-    try {
-      const res = await fetch("/api/checkin/waitlist/demote", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ registrationId: waitlistTarget.id }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        toast(data.error ?? "Konnte nicht auf die Warteliste gesetzt werden.", "error");
-        return;
-      }
-      toast("Auf Warteliste gesetzt – E-Mail ist unterwegs.", "success");
-      setWaitlistTarget(null);
-      fetchRegistrations();
-    } catch {
-      toast("Netzwerkfehler.", "error");
-    } finally {
-      setMovingToWaitlist(false);
-    }
-  };
 
   const fetchRegistrations = () => {
     setLoading(true);
@@ -181,14 +109,6 @@ export default function RegistrationTable({
   const selectedRegs = useMemo(
     () => registrations.filter((r) => selectedIds.has(r.id)),
     [registrations, selectedIds]
-  );
-  const offerableIds = useMemo(
-    () => selectedRegs.filter(isOfferable).map((r) => r.id),
-    [selectedRegs]
-  );
-  const demotableIds = useMemo(
-    () => selectedRegs.filter(isDemotable).map((r) => r.id),
-    [selectedRegs]
   );
   const pageSelectedCount = paginated.filter((r) => selectedIds.has(r.id)).length;
   const allOnPageSelected = paginated.length > 0 && pageSelectedCount === paginated.length;
@@ -245,10 +165,8 @@ export default function RegistrationTable({
   /**
    * Führt die im Dialog bestätigte Bulk-Aktion aus.
    *
-   * Statuswechsel kann der Server in einem Rutsch (bulk-status). Anbieten,
-   * Warteliste und Löschen laufen pro Anmeldung, weil die Endpunkte einzeln
-   * arbeiten – E-Mail-Versand bzw. Platzfreigabe hängen an der einzelnen
-   * Anmeldung.
+   * Statuswechsel kann der Server in einem Rutsch (bulk-status). Löschen
+   * läuft pro Anmeldung, weil der Endpunkt einzeln arbeitet.
    */
   const runBulkOp = async () => {
     if (!bulkOp || selectedIds.size === 0) return;
@@ -271,41 +189,19 @@ export default function RegistrationTable({
         }
         toast(`${selectedIds.size} Anmeldung(en) aktualisiert!`, "success");
       } else {
-        const ids =
-          bulkOp.kind === "offer"
-            ? offerableIds
-            : bulkOp.kind === "waitlist"
-            ? demotableIds
-            : Array.from(selectedIds);
+        const ids = Array.from(selectedIds);
         let done = 0;
         let failed = 0;
         for (const id of ids) {
           try {
-            const res =
-              bulkOp.kind === "delete"
-                ? await fetch(`/api/admin/registrations/${id}`, { method: "DELETE" })
-                : await fetch(
-                    bulkOp.kind === "offer"
-                      ? "/api/checkin/waitlist/offer"
-                      : "/api/checkin/waitlist/demote",
-                    {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ registrationId: id }),
-                    }
-                  );
+            const res = await fetch(`/api/admin/registrations/${id}`, { method: "DELETE" });
             if (res.ok) done++;
             else failed++;
           } catch {
             failed++;
           }
         }
-        const verb =
-          bulkOp.kind === "offer"
-            ? "Platz angeboten"
-            : bulkOp.kind === "waitlist"
-            ? "auf Warteliste gesetzt"
-            : "gelöscht";
+        const verb = "gelöscht";
         if (failed === 0) {
           toast(`${done} Anmeldung(en) ${verb}.`, "success");
         } else {
@@ -464,28 +360,6 @@ export default function RegistrationTable({
               <CheckCircle2 className="mr-1 h-4 w-4" />
               Bestätigen
             </Button>
-            {offerableIds.length > 0 && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-blue-300 bg-white text-blue-700 hover:bg-blue-100"
-                onClick={() => setBulkOp({ kind: "offer" })}
-              >
-                <Mail className="mr-1 h-4 w-4" />
-                Platz anbieten ({offerableIds.length})
-              </Button>
-            )}
-            {demotableIds.length > 0 && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-amber-300 bg-white text-amber-700 hover:bg-amber-50"
-                onClick={() => setBulkOp({ kind: "waitlist" })}
-              >
-                <Hourglass className="mr-1 h-4 w-4" />
-                Auf Warteliste ({demotableIds.length})
-              </Button>
-            )}
             <Button
               size="sm"
               variant="outline"
@@ -615,27 +489,6 @@ export default function RegistrationTable({
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         <RegistrationDetailButton registrationId={r.id} />
-                        {r.status === "pending" && r.is_waitlist && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            title="Platz anbieten – wird zahlbar und bekommt eine E-Mail"
-                            disabled={offeringId === r.id}
-                            onClick={() => handleOfferSpot(r)}
-                          >
-                            <Mail className="w-4 h-4 text-blue-500" />
-                          </Button>
-                        )}
-                        {isDemotable(r) && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            title="Auf Warteliste setzen – Platz wird frei, bekommt eine E-Mail"
-                            onClick={() => setWaitlistTarget(r)}
-                          >
-                            <Hourglass className="w-4 h-4 text-amber-500" />
-                          </Button>
-                        )}
                         {r.status !== "approved" && r.status !== "cancelled" && (
                           <Button
                             variant="ghost"
@@ -755,29 +608,6 @@ export default function RegistrationTable({
                     size="sm"
                     className="w-full justify-start"
                   />
-                  {r.status === "pending" && r.is_waitlist && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-blue-700 border-blue-200 w-full"
-                      disabled={offeringId === r.id}
-                      onClick={() => handleOfferSpot(r)}
-                    >
-                      <Mail className="w-3.5 h-3.5 mr-1.5" />
-                      Platz anbieten
-                    </Button>
-                  )}
-                  {isDemotable(r) && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-amber-700 border-amber-200 w-full"
-                      onClick={() => setWaitlistTarget(r)}
-                    >
-                      <Hourglass className="w-3.5 h-3.5 mr-1.5" />
-                      Auf Warteliste
-                    </Button>
-                  )}
                   {r.status !== "approved" && r.status !== "cancelled" && (
                     <Button
                       size="sm"
@@ -909,10 +739,6 @@ export default function RegistrationTable({
             <DialogTitle>
               {bulkOp?.kind === "delete"
                 ? `${selectedIds.size} Anmeldung(en) löschen`
-                : bulkOp?.kind === "offer"
-                ? `${offerableIds.length} Wartelisten-Anmeldung(en): Platz anbieten`
-                : bulkOp?.kind === "waitlist"
-                ? `${demotableIds.length} Anmeldung(en) auf die Warteliste setzen`
                 : bulkStatus === "approved"
                 ? `${selectedIds.size} Anmeldung(en) bestätigen`
                 : bulkStatus === "rejected"
@@ -922,10 +748,6 @@ export default function RegistrationTable({
             <DialogDescription>
               {bulkOp?.kind === "delete"
                 ? "Die Anmeldungen werden endgültig entfernt und die Plätze wieder freigegeben. Das lässt sich nicht rückgängig machen."
-                : bulkOp?.kind === "offer"
-                ? "Die Warteliste-Markierung fällt weg, der Status bleibt ausstehend. Alle bekommen eine E-Mail mit dem Platzangebot. Nicht ausgewählte Wartelisten-Anmeldungen bleiben unberührt."
-                : bulkOp?.kind === "waitlist"
-                ? "Die Plätze werden frei, die Anmeldungen sind nicht mehr zahlbar. Alle bekommen eine E-Mail. Bestätigte und bereits bezahlte Anmeldungen bleiben unberührt."
                 : bulkStatus === "pending"
                 ? "Die ausgewählten Anmeldungen wandern zurück auf ausstehend."
                 : "Diese Aktion betrifft alle ausgewählten Anmeldungen. E-Mail-Benachrichtigungen werden versendet."}
@@ -960,38 +782,11 @@ export default function RegistrationTable({
               {bulkProcessing && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
               {bulkOp?.kind === "delete"
                 ? "Alle löschen"
-                : bulkOp?.kind === "offer"
-                ? "Platz anbieten"
-                : bulkOp?.kind === "waitlist"
-                ? "Auf Warteliste setzen"
                 : bulkStatus === "approved"
                 ? "Alle bestätigen"
                 : bulkStatus === "rejected"
                 ? "Alle ablehnen"
                 : "Auf ausstehend setzen"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Auf Warteliste setzen */}
-      <Dialog open={!!waitlistTarget} onOpenChange={(o) => !o && setWaitlistTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Auf Warteliste setzen</DialogTitle>
-            <DialogDescription>
-              {waitlistTarget?.first_name} {waitlistTarget?.last_name} – {waitlistTarget?.event_title}.
-              Der Platz wird wieder frei und die Anmeldung ist nicht mehr zahlbar. Die Person
-              bekommt eine E-Mail. Über „Platz anbieten“ lässt sich das rückgängig machen.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-3 mt-4">
-            <Button variant="outline" onClick={() => setWaitlistTarget(null)}>
-              Abbrechen
-            </Button>
-            <Button onClick={handleMoveToWaitlist} disabled={movingToWaitlist}>
-              {movingToWaitlist && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-              Auf Warteliste setzen
             </Button>
           </div>
         </DialogContent>

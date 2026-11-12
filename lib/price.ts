@@ -143,11 +143,31 @@ export function formatPriceLabel(
   return result && result.totalCents > 0 ? `${result.breakdown} = ${formatEuro(result.totalCents / 100)}` : null;
 }
 
-interface RegistrationPriceFields {
+export interface RegistrationPriceFields {
   price?: string | null;
   entry_price?: number | null;
   child_entry_price?: number | null;
   child_price?: string | null;
+}
+
+/**
+ * Stückpreise in Cent, die für Erwachsene und Kinder verlangt werden dürfen.
+ * null = kein verbindlicher Betrag (Freitext wie "Spende willkommen"), 0 = kostenlos.
+ * Grundlage für Anmeldung, Checkout und die Preisstufen in Stripe.
+ */
+export function registrationUnitCents(event: RegistrationPriceFields): { adult: number | null; child: number | null } {
+  const text = (event.price ?? "").trim();
+  const adultAmount = bindingEntryPrice(event) ?? (
+    (event.entry_price == null || event.entry_price === 0) &&
+    (text === FREE_PRICE_LABEL || parsePriceText(text) === 0) ? 0 : null
+  );
+  const childAmount = event.child_entry_price ?? adultAmount;
+  const toCents = (amount: number | null) => {
+    if (amount == null) return null;
+    const cents = Math.round(amount * 100);
+    return Number.isSafeInteger(cents) && cents >= 0 ? cents : null;
+  };
+  return { adult: toCents(adultAmount), child: toCents(childAmount) };
 }
 
 /** Gemeinsame Cent-Rechnung für Anzeige und Checkout. null = kein verbindlicher Betrag. */
@@ -159,16 +179,10 @@ export function calculateRegistrationPrice(
   if (!Number.isInteger(personCount) || !Number.isInteger(childCount) ||
       personCount < 1 || childCount < 0 || childCount > personCount) return null;
   const adultCount = personCount - childCount;
-  const text = (event.price ?? "").trim();
-  const adultAmount = bindingEntryPrice(event) ?? (
-    (event.entry_price == null || event.entry_price === 0) &&
-    (text === FREE_PRICE_LABEL || parsePriceText(text) === 0) ? 0 : null
-  );
-  const childAmount = event.child_entry_price ?? adultAmount;
-  if ((adultCount > 0 && adultAmount == null) || (childCount > 0 && childAmount == null)) return null;
-  const adultUnitCents = Math.round((adultAmount ?? 0) * 100);
-  const childUnitCents = Math.round((childAmount ?? 0) * 100);
-  if (![adultUnitCents, childUnitCents].every((value) => Number.isSafeInteger(value) && value >= 0)) return null;
+  const unit = registrationUnitCents(event);
+  if ((adultCount > 0 && unit.adult == null) || (childCount > 0 && unit.child == null)) return null;
+  const adultUnitCents = unit.adult ?? 0;
+  const childUnitCents = unit.child ?? 0;
   const totalCents = adultCount * adultUnitCents + childCount * childUnitCents;
   const separateChildPrice = event.child_entry_price != null && childCount > 0;
   const breakdown = separateChildPrice
@@ -195,7 +209,7 @@ export function normalizeManualChildPrice(input: { child_entry_price?: unknown; 
   if (text.length > 100) throw new Error("Der Kinderpreis-Text darf höchstens 100 Zeichen lang sein.");
   if (raw == null || raw === "") {
     if (text) throw new Error("Bitte zum Kinderpreis-Text einen festen Betrag hinterlegen (auch 0 € möglich).");
-    return { child_entry_price: null, child_price: null, stripe_child_price_id: null };
+    return { child_entry_price: null, child_price: null };
   }
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > MAX_PRICE_CENTS / 100) {
     throw new Error("Bitte einen gültigen Kinderbetrag ab 0 € eingeben.");
@@ -203,7 +217,6 @@ export function normalizeManualChildPrice(input: { child_entry_price?: unknown; 
   return {
     child_entry_price: Math.round(raw * 100) / 100,
     child_price: text && parsePriceText(text) == null ? text : null,
-    stripe_child_price_id: null,
   };
 }
 
@@ -247,20 +260,4 @@ export function formatAmountPlain(cents: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amountFromCents(cents));
-}
-
-/**
- * Eine Stripe Price ID gehört untrennbar zum Betrag, aus dem sie stammt.
- * Ohne Betrag ist sie bedeutungslos, und eine ID, die zu einem inzwischen
- * von Hand geänderten Betrag stehen bleibt, wäre genau der Drift, den dieses
- * Modul verhindern soll. Deshalb wird sie hier gemeinsam mit dem Betrag
- * normalisiert und fällt weg, sobald keiner mehr da ist.
- */
-export function normalizeStripePriceId(
-  value: unknown,
-  entryPrice: number | null
-): string | null {
-  if (entryPrice == null || typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return /^price_[A-Za-z0-9]+$/.test(trimmed) ? trimmed : null;
 }

@@ -62,6 +62,7 @@ export default function RegistrationDetailButton({
         loading={loading}
         data={data}
         error={error}
+        onChange={setData}
       />
     </>
   );

@@ -17,7 +17,6 @@ import {
   priceFromAmount,
   priceFromText,
   normalizePrice,
-  normalizeStripePriceId,
 } from "../lib/price";
 import { formatEuro } from "../lib/finance";
 
@@ -217,27 +216,6 @@ describe("Cent-Umrechnung", () => {
     // Stripe liefert unit_amount: 500
     expect(amountFromCents(500)).toBe(5);
     expect(priceFromAmount(amountFromCents(500)).price).toBe(formatEuro(5));
-  });
-});
-
-describe("normalizeStripePriceId", () => {
-  it("behält eine gültige ID, wenn ein Betrag da ist", () => {
-    expect(normalizeStripePriceId("price_1AbCdEfGhIjKlMnO", 5)).toBe("price_1AbCdEfGhIjKlMnO");
-    expect(normalizeStripePriceId("  price_1AbC  ", 5)).toBe("price_1AbC");
-  });
-
-  it("verwirft die ID, sobald kein Betrag mehr da ist", () => {
-    // Admin wechselt auf Freitext – die alte ID passt zu nichts mehr
-    expect(normalizeStripePriceId("price_1AbCdEfGhIjKlMnO", null)).toBeNull();
-  });
-
-  it("verwirft alles, was keine Stripe Price ID ist", () => {
-    expect(normalizeStripePriceId("", 5)).toBeNull();
-    expect(normalizeStripePriceId("prod_1AbC", 5)).toBeNull();
-    expect(normalizeStripePriceId("price_1AbC; DROP TABLE events", 5)).toBeNull();
-    expect(normalizeStripePriceId(42, 5)).toBeNull();
-    expect(normalizeStripePriceId(null, 5)).toBeNull();
-    expect(normalizeStripePriceId(undefined, 5)).toBeNull();
   });
 });
 

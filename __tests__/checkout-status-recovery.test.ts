@@ -18,6 +18,8 @@ vi.mock("@/lib/db", async () => ({
   getRegistrationCheckouts: mocks.saved,
   saveCheckoutPricing: mocks.savePricing,
   recordCheckoutState: vi.fn(),
+  isPostgresConfigured: () => true,
+  getRegistrationDiscountRequests: async () => [],
 }));
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({ checkout: { sessions: { create: mocks.create, retrieve: mocks.retrieve, list: mocks.list } } }),

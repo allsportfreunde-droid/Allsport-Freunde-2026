@@ -5,8 +5,8 @@
       "schedule": "0 8 * * *"
     },
     {
-      "path": "/api/cron/send-surveys",
-      "schedule": "0 10 * * *"
+      "path": "/api/cron/purge-discount-proofs",
+      "schedule": "30 3 * * *"
     }
   ]
 }

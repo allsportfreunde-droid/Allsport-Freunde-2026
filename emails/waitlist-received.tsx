@@ -18,6 +18,8 @@ interface Props {
   eventLocation: string;
   statusUrl: string;
   persons?: Array<{ firstName: string; lastName: string }>;
+  /** Kostenpflichtiges Event: Wer nachrückt, zahlt – und wer zuerst zahlt, bekommt den Platz. */
+  paid?: boolean;
 }
 
 export function WaitlistReceivedEmail({
@@ -28,6 +30,7 @@ export function WaitlistReceivedEmail({
   eventLocation,
   statusUrl,
   persons,
+  paid,
 }: Props) {
   return (
     <Html lang="de">
@@ -45,8 +48,9 @@ export function WaitlistReceivedEmail({
           </Text>
           <Section style={waitlistBox}>
             <Text style={waitlistText}>
-              Wir melden uns per E-Mail, sobald ein Platz frei wird oder deine
-              Anmeldung bestätigt werden kann. Du musst nichts weiter tun.
+              {paid
+                ? "Wird ein Platz frei, bekommst du eine E-Mail und kannst sofort bezahlen – den Platz bekommt, wer zuerst bezahlt. Bis dahin musst du nichts tun und nichts bezahlen."
+                : "Wir melden uns per E-Mail, sobald ein Platz frei wird oder deine Anmeldung bestätigt werden kann. Du musst nichts weiter tun."}
             </Text>
           </Section>
           <Section style={infoBox}>

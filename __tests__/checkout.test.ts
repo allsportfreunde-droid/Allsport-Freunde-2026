@@ -4,7 +4,7 @@ import { POST } from "../app/api/checkout/route";
 import type { CheckoutInfo, EventCreateInput } from "../lib/types";
 import {
   createLocalEvent, createLocalWalkInRegistration, getLocalCheckoutInfo,
-  getLocalRegistrationByToken, resetLocalData, updateLocalEvent,
+  getLocalRegistrationByToken, resetLocalData, saveLocalEventStripeCatalog, updateLocalEvent,
 } from "../lib/local-data";
 
 const { checkoutInfo, createSession, stripeClient, savePricing } = vi.hoisted(() => ({
@@ -24,7 +24,7 @@ vi.mock("@/lib/ratelimit", () => ({ checkRateLimit: () => true, getClientIp: () 
 function info(overrides: Partial<CheckoutInfo> = {}): CheckoutInfo {
   return {
     registration_id: 1, event_id: 1, event_title: "Sport", event_date: "2099-06-01",
-    email: "test@example.com", status: "pending", is_waitlist: false, paid_at: null,
+    email: "test@example.com", status: "pending", is_waitlist: false, event_full: false, paid_at: null,
     price: "10 €", entry_price: 10, stripe_price_id: "price_adult",
     child_entry_price: 4, stripe_child_price_id: "price_child",
     person_count: 3, child_count: 1, ...overrides,
@@ -46,7 +46,7 @@ beforeEach(() => {
   checkoutInfo.mockResolvedValue(info());
   savePricing.mockResolvedValue(undefined);
   createSession.mockImplementation(async (params) => {
-    const amounts: Record<string, number> = { price_adult: 1000, price_child: 400, price_free: 0, price_new: 200 };
+    const amounts: Record<string, number> = { price_adult: 1000, price_child: 400, price_free: 0, price_new: 200, price_adult_50: 500 };
     const items = params.line_items as Array<{ price?: string; price_data?: { unit_amount?: number }; quantity: number }>;
     return {
       id: "cs_test", url: "https://checkout.stripe.com/test", currency: "eur",
@@ -136,7 +136,7 @@ describe("Checkout mit Erwachsenen und Kindern", () => {
   });
 
   it.each([
-    { is_waitlist: true }, { status: "cancelled" as const }, { status: "rejected" as const },
+    { event_full: true }, { status: "cancelled" as const }, { status: "rejected" as const },
     { paid_at: "2026-09-15T10:00:00Z" }, { person_count: 0, child_count: 0 },
     { price: "Spende willkommen", child_entry_price: null },
   ])("verhindert eine Zahlung bei %j", async (overrides) => {
@@ -145,14 +145,54 @@ describe("Checkout mit Erwachsenen und Kindern", () => {
     expect(createSession).not.toHaveBeenCalled();
   });
 
+  it("rechnet ermäßigte Personen mit ihrer Price ID oder ihrem Betrag ab", async () => {
+    checkoutInfo.mockResolvedValue(info({
+      person_count: 3, child_count: 1,
+      stripe_adult_reduced_50_price_id: "price_adult_50",
+      persons: [
+        { id: "p1", is_child: false, discount: null },
+        { id: "p2", is_child: false, discount: "reduced_50" },
+        { id: "p3", is_child: true, discount: "reduced_30" },
+      ],
+    }));
+    expect((await POST(request())).status).toBe(200);
+    expect(createSession.mock.calls[0][0].line_items).toEqual([
+      { price: "price_adult", quantity: 1 },
+      { price: "price_adult_50", quantity: 1 },
+      // Ohne hinterlegte ID (etwa vor dem ersten Stripe-Abgleich) mit dem Betrag selbst.
+      { price_data: { currency: "eur", unit_amount: 280, product_data: { name: "Sport – Kinder (30 % ermäßigt)" } }, quantity: 1 },
+    ]);
+    expect(savePricing).toHaveBeenCalledWith("cs_test", 1, { p1: 1000, p2: 500, p3: 280 });
+  });
+
+  it("lässt mit eingereichtem Nachweis sofort ermäßigt zahlen, auch wenn das Team noch nicht geprüft hat", async () => {
+    // Offener Antrag mit Nachweis: Die Ermäßigung steht seit dem Upload an der Person.
+    checkoutInfo.mockResolvedValue(info({
+      person_count: 1, child_count: 0,
+      persons: [{ id: "p1", is_child: false, discount: "reduced_50" }],
+    }));
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    expect(createSession.mock.calls[0][0].line_items).toEqual([
+      { price_data: { currency: "eur", unit_amount: 500, product_data: { name: "Sport – Erwachsene (50 % ermäßigt)" } }, quantity: 1 },
+    ]);
+  });
+
   it("zählt gespeicherte Kinder und schließt stornierte Personen aus", async () => {
     const event: EventCreateInput = {
       title: "Sport", category: "fussball", description: "", date: "2099-06-01", time: "12:00",
       location: "Halle", dress_code: "Sport", max_participants: 10,
-      price: "10 €", entry_price: 10, stripe_price_id: "price_adult",
-      child_entry_price: 4, stripe_child_price_id: "price_child",
+      price: "10 €", entry_price: 10, child_entry_price: 4,
     };
     const { id } = createLocalEvent(event);
+    // Stellvertretend für den Stripe-Abgleich nach dem Speichern.
+    const catalog = (child: string) => ({
+      stripe_tier_products: { adult: "prod_adult", child: "prod_child" },
+      stripe_price_id: "price_adult", stripe_child_price_id: child,
+      stripe_adult_reduced_30_price_id: null, stripe_adult_reduced_50_price_id: null,
+      stripe_child_reduced_30_price_id: null, stripe_child_reduced_50_price_id: null,
+    });
+    expect(saveLocalEventStripeCatalog(id, catalog("price_child"), event)).toBe(true);
     const registration = createLocalWalkInRegistration({
       event_id: id, email: "test@example.com", phone: null, notes: null, checked_in_by: null,
       persons: [
@@ -168,9 +208,18 @@ describe("Checkout mit Erwachsenen und Kindern", () => {
       { price: "price_adult", quantity: 1 }, { price: "price_child", quantity: 1 },
     ]);
     // Die Anmeldung bleibt bestehen; der nächste Checkout nutzt den geänderten Eventpreis.
-    updateLocalEvent(id, { ...event, child_entry_price: 2, stripe_child_price_id: "price_new" });
+    // Bis der Abgleich neue IDs liefert, zeigt keine ID auf den alten Betrag.
+    updateLocalEvent(id, { ...event, child_entry_price: 2 });
     await POST(request({ status_token: registration.status_token }));
     expect(createSession.mock.calls[1][0].line_items).toEqual([
+      expect.objectContaining({ price_data: expect.objectContaining({ unit_amount: 1000 }), quantity: 1 }),
+      expect.objectContaining({ price_data: expect.objectContaining({ unit_amount: 200 }), quantity: 1 }),
+    ]);
+    // Ein Abgleich zum alten Betrag wird verworfen, der zum neuen übernommen.
+    expect(saveLocalEventStripeCatalog(id, catalog("price_child"), event)).toBe(false);
+    expect(saveLocalEventStripeCatalog(id, catalog("price_new"), { ...event, child_entry_price: 2 })).toBe(true);
+    await POST(request({ status_token: registration.status_token }));
+    expect(createSession.mock.calls[2][0].line_items).toEqual([
       { price: "price_adult", quantity: 1 }, { price: "price_new", quantity: 1 },
     ]);
     expect(getLocalRegistrationByToken(registration.status_token)!.event_child_entry_price).toBe(2);

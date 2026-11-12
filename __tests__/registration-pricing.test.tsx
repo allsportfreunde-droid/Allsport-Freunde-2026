@@ -48,7 +48,7 @@ function statusInfo(childCount: number, childPrice: number): RegistrationStatusI
     id: 1, first_name: "Test", last_name: "Familie", email: "test@example.com", guests: 1,
     status: "pending", status_changed_at: null, status_note: null, created_at: "2026-09-15T10:00:00Z",
     event_title: "Sport", event_date: "2099-06-01", event_time: "12:00", event_location: "Halle",
-    event_category: "fussball", is_waitlist: false, paid_at: null, event_cancellation_deadline: null,
+    event_category: "fussball", event_id: 1, is_waitlist: false, event_full: false, paid_at: null, event_cancellation_deadline: null,
     event_price: "10 €", event_entry_price: 10, event_child_entry_price: childPrice,
     event_dress_code: "Sport", qr_code: null, checked_in_at: null,
     persons: [0, 1].map((index) => ({

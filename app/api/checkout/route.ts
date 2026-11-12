@@ -3,13 +3,24 @@ import { getStripe } from "@/lib/stripe";
 import { checkRateLimit, getClientIp, RATE_LIMITS } from "@/lib/ratelimit";
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { calculateRegistrationPrice } from "@/lib/price";
+import { calculatePersonsPrice, TIER_PRICE_COLUMNS } from "@/lib/price-tiers";
 import { createPersonPrices, personPricesTotal } from "@/lib/payment-prices";
 import { randomUUID } from "node:crypto";
 import { CheckoutBlockedError, closePreviousCheckouts } from "@/lib/checkout-status";
 import { discoverRegistrationCheckouts, recoverCheckoutCreation } from "@/lib/checkout-creation";
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+
+const EVENT_FULL_MESSAGE =
+  "Das Event ist gerade ausgebucht. Du stehst auf der Warteliste – wird ein Platz frei, bekommst du eine E-Mail und kannst sofort bezahlen.";
+
+/**
+ * Plätze belegen nur bestätigte Anmeldungen (lib/waitlist.ts). Eine offene
+ * Anmeldung darf deshalb nur zahlen, solange noch ein Platz frei ist. Wer
+ * schon bestätigt ist (Team, Walk-in) und nur noch zahlt, hat seinen Platz.
+ */
+const blockedByCapacity = (info: { status: string; event_full: boolean }) =>
+  info.status === "pending" && info.event_full;
 
 /**
  * Startet eine Stripe-Zahlung für eine bestehende Anmeldung.
@@ -47,17 +58,14 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
-    // Wer keinen Platz hat, darf auch nicht zahlen – sonst kassieren wir für
-    // etwas, das es noch nicht gibt. Der Button wird ohnehin nicht angezeigt;
-    // diese Prüfung gilt dem direkten Aufruf der Route.
-    if (info.is_waitlist) {
-      return NextResponse.json(
-        { error: "Für Wartelisten-Anmeldungen ist noch keine Zahlung möglich." },
-        { status: 409 }
-      );
-    }
     if (info.paid_at) {
       return NextResponse.json({ error: "Diese Anmeldung wurde bereits bezahlt." }, { status: 409 });
+    }
+    // Ist das Event voll, gibt es nichts zu verkaufen. Der Button wird dann
+    // ohnehin nicht angezeigt; diese Prüfung gilt dem direkten Aufruf und
+    // einer veralteten Statusseite.
+    if (blockedByCapacity(info)) {
+      return NextResponse.json({ error: EVENT_FULL_MESSAGE, payment_state: "open", reason: "event_full" }, { status: 409 });
     }
     if (info.person_count < 1) {
       return NextResponse.json(
@@ -65,7 +73,7 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
-    let pricing = calculateRegistrationPrice(info, info.person_count, info.child_count);
+    let pricing = calculatePersonsPrice(info, info.persons);
     if (!pricing || pricing.totalCents === 0) {
       return NextResponse.json(
         { error: "Für diese Anmeldung ist keine Zahlung erforderlich. Die Bestätigung erfolgt durch das Team." },
@@ -92,35 +100,35 @@ export async function POST(request: NextRequest) {
 
     // Nach dem Abgleich erneut lesen: Webhook, Stornierung oder Preisänderung können inzwischen erfolgt sein.
     info = await getCheckoutInfo(token);
-    if (!info || info.registration_id !== lockedRegistrationId || info.status === "cancelled" || info.status === "rejected" || info.is_waitlist) {
+    if (!info || info.registration_id !== lockedRegistrationId || info.status === "cancelled" || info.status === "rejected") {
       throw new CheckoutBlockedError("Diese Anmeldung kann derzeit nicht bezahlt werden.", "open");
     }
     if (info.paid_at) throw new CheckoutBlockedError("Diese Anmeldung wurde bereits bezahlt.", "paid");
-    pricing = calculateRegistrationPrice(info, info.person_count, info.child_count);
+    if (blockedByCapacity(info)) throw new CheckoutBlockedError(EVENT_FULL_MESSAGE, "open");
+    pricing = calculatePersonsPrice(info, info.persons);
     if (!pricing || pricing.totalCents === 0) {
       throw new CheckoutBlockedError("Für diese Anmeldung ist keine Zahlung erforderlich. Die Bestätigung erfolgt durch das Team.", "open");
     }
 
-    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
-    const addItem = (quantity: number, unitAmount: number, priceId: string | null, label: string) => {
-      if (quantity === 0) return;
-      lineItems.push(priceId ? { price: priceId, quantity } : {
+    // Eine Zeile je Preisstufe. Mit Stripe Price ID, wenn der Abgleich eine
+    // zum aktuellen Betrag hinterlegt hat (siehe lib/stripe-catalog.ts) –
+    // sonst mit dem Betrag selbst. Die Summenprüfung unten fängt beides ab.
+    const checkoutInfo = info;
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = pricing.groups.map(
+      ({ tier, count, unitCents, lineLabel }) => {
+        const priceId = checkoutInfo[TIER_PRICE_COLUMNS[tier]] ?? null;
+        return priceId ? { price: priceId, quantity: count } : {
           price_data: {
             currency: "eur",
-            unit_amount: unitAmount,
-            product_data: { name: `${info.event_title} – ${label}` },
+            unit_amount: unitCents,
+            product_data: { name: `${checkoutInfo.event_title} – ${lineLabel}` },
           },
-          quantity,
-        });
-    };
-    if (info.child_entry_price == null) {
-      addItem(info.person_count, pricing.adultUnitCents, info.stripe_price_id, "Eintritt");
-    } else {
-      addItem(pricing.adultCount, pricing.adultUnitCents, info.stripe_price_id, "Erwachsene");
-      addItem(pricing.childCount, pricing.childUnitCents, info.stripe_child_price_id, "Kinder");
-    }
+          quantity: count,
+        };
+      }
+    );
 
-    const personPrices = createPersonPrices(info.persons, pricing.adultUnitCents, pricing.childUnitCents);
+    const personPrices = createPersonPrices(info.persons, pricing.centsFor);
     if (info.persons.length !== info.person_count || personPricesTotal(personPrices) !== pricing.totalCents) {
       throw new Error("Personen und Checkout-Summe stimmen nicht überein.");
     }
@@ -187,7 +195,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ url: session.url });
   } catch (error) {
     if (error instanceof CheckoutBlockedError) {
-      return NextResponse.json({ error: error.message, payment_state: error.paymentState }, { status: 409 });
+      return NextResponse.json({
+        error: error.message,
+        payment_state: error.paymentState,
+        ...(error.message === EVENT_FULL_MESSAGE ? { reason: "event_full" } : {}),
+      }, { status: 409 });
     }
     console.error("Fehler beim Starten der Zahlung:", error);
     return NextResponse.json(

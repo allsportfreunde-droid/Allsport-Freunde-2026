@@ -20,6 +20,8 @@ import {
   ChevronLeft,
   ChevronRight,
   UserCheck,
+  Star,
+  BadgePercent,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -36,6 +38,7 @@ const navSections = [
       { href: "/admin/registrations", label: "Anmeldungen", icon: Users },
       { href: "/admin/teilnehmer", label: "Teilnehmer", icon: UserCheck },
       { href: "/admin/checkin", label: "Check-In", icon: ClipboardCheck },
+      { href: "/admin/reviews", label: "Reviews", icon: Star },
     ],
   },
   {
@@ -44,6 +47,7 @@ const navSections = [
       { href: "/admin/finanzen", label: "Finanzen", icon: BarChart3 },
       { href: "/admin/contact", label: "Anfragen", icon: MessageSquare },
       { href: "/admin/helfer", label: "Helfer", icon: UserCheck },
+      { href: "/admin/ermaessigungen", label: "Ermäßigungen", icon: BadgePercent },
     ],
   },
 ];

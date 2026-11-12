@@ -1,6 +1,27 @@
+import type { Discount, PriceTier } from "./price-tiers";
+import type { DiscountRequestInfo } from "./discount-requests";
+
 export type EventStatus = "draft" | "published" | "cancelled";
 
-export interface Event {
+/**
+ * Die Stripe-Produkte eines Events – eines je Preisstufe – und ihre aktuellen
+ * Preise (siehe lib/price-tiers.ts). Entsteht ausschließlich serverseitig beim
+ * Speichern (lib/stripe-catalog.ts), nie aus Eingaben des Browsers. Eine Price
+ * ID ist leer, solange sie nicht zum aktuell gespeicherten Betrag passt; die
+ * Produkte bleiben gemerkt, damit eine Stufe immer dasselbe Produkt behält.
+ */
+export interface EventStripeCatalog {
+  /** Produkt je Stufe; Stufen ohne eigenes Produkt fehlen. */
+  stripe_tier_products: Partial<Record<PriceTier, string>> | null;
+  stripe_price_id: string | null;
+  stripe_child_price_id: string | null;
+  stripe_adult_reduced_30_price_id: string | null;
+  stripe_adult_reduced_50_price_id: string | null;
+  stripe_child_reduced_30_price_id: string | null;
+  stripe_child_reduced_50_price_id: string | null;
+}
+
+export interface Event extends Partial<EventStripeCatalog> {
   id: number;
   title: string;
   category: "fussball" | "fitness" | "schwimmen";
@@ -12,14 +33,14 @@ export interface Event {
   price: string;
   /** Numeric entry price per person in Euro (null = free / not set) */
   entry_price?: number | null;
-  /** Stripe Price ID the amount came from (null = manually maintained) */
-  stripe_price_id?: string | null;
   /** Kinderbetrag in Euro: null = Erwachsenenpreis, 0 = kostenlos. */
   child_entry_price?: number | null;
   /** Optionaler Anzeigetext; der feste Kinderbetrag gilt weiterhin. */
   child_price?: string | null;
-  /** Stripe Price ID für Kinder, auch für einen Preis von 0 Euro. */
-  stripe_child_price_id?: string | null;
+  /** Früher ein Produkt je Event – wird beim nächsten Abgleich archiviert und geleert. */
+  stripe_product_id?: string | null;
+  /** Links zu den Produkten im Stripe-Dashboard – nur Admin-API, serverseitig gebaut. */
+  stripe_product_urls?: Partial<Record<PriceTier, string>>;
   dress_code: string;
   max_participants: number;
   /** Max persons per email address (default 5) */
@@ -28,8 +49,6 @@ export interface Event {
   cancellation_reason: string | null;
   published_at: string | null;
   created_at: string;
-  /** Optional URL for post-event feedback survey */
-  survey_url?: string | null;
   /** Eigener Stornozeitpunkt "YYYY-MM-DDTHH:MM" (null = 24 Stunden vor Beginn) */
   cancellation_deadline?: string | null;
 }
@@ -79,12 +98,10 @@ export interface EventWithRegistrations extends Event {
  * (max / current / pending) is never sent to the browser.
  */
 export function toPublicEvent(e: EventWithRegistrations): EventWithRegistrations {
-  // Count both approved and still-pending sign-ups towards the occupancy. A
-  // pending sign-up already reserves a spot, so ignoring it made the event
-  // look emptier than it really is and confused visitors. Now the public
-  // indicator reflects how many spots are effectively taken. Wartelisten-
-  // Anmeldungen stecken nicht in pending_participants – sie belegen keinen Platz.
-  const occupied = (e.current_participants ?? 0) + (e.pending_participants ?? 0);
+  // Belegt sind nur bestätigte Plätze – dieselbe Definition wie
+  // getApprovedPersonCount. Eine offene Anmeldung reserviert nichts: Den Platz
+  // bekommt, wer zuerst bezahlt (oder wen das Team bestätigt).
+  const occupied = e.current_participants ?? 0;
   const max = e.max_participants ?? 0;
   const isFull = max > 0 && occupied >= max;
   // Never round up to 100 % unless the event is actually full.
@@ -117,6 +134,8 @@ export interface RegistrationPerson {
   last_name: string;
   /** true = Kind (U18). Wird bei der Anmeldung per Toggle gesetzt, Default false. */
   is_child: boolean;
+  /** Bei der Anmeldung serverseitig aus der Ermäßigungsliste übernommen; null = voller Preis. */
+  discount?: Discount | null;
   checked_in_at: string | null;
   cancelled_at: string | null;
   created_at: string;
@@ -166,7 +185,15 @@ export interface RegistrationRequest {
   event_id: number;
   email: string;
   phone: string;
-  persons: Array<{ firstName: string; lastName: string; isChild?: boolean }>;
+  persons: Array<{
+    firstName: string;
+    lastName: string;
+    isChild?: boolean;
+    /** Ermäßigungsantrag – wird serverseitig geprüft (lib/discount-requests.ts). */
+    discountRequest?: unknown;
+  }>;
+  /** Einwilligung zur Speicherung der Nachweise; Pflicht, sobald ein Antrag dabei ist. */
+  discountConsent?: boolean;
 }
 
 export interface RegistrationWithEvent extends Registration {
@@ -208,6 +235,8 @@ export interface RegistrationDetail extends RegistrationWithEvent {
    * Betrag dort einzutragen ist.
    */
   refund_due?: { amount: number; persons: number } | null;
+  /** Das Event hat einen verbindlichen Preis – nur dann lässt sich eine Ermäßigung setzen. */
+  discount_available?: boolean;
   /** All persons registered under this email (incl. main person), ordered by created_at */
   persons: RegistrationPerson[];
 }
@@ -219,6 +248,8 @@ export interface EventPerson {
   last_name: string;
   /** true = Kind (U18) */
   is_child: boolean;
+  /** Ermäßigung aus der Anmeldung; null = voller Preis. */
+  discount?: Discount | null;
   checked_in_at: string | null;
   cancelled_at: string | null;
   email: string | null;
@@ -267,7 +298,14 @@ export interface RegistrationStatusInfo {
   event_time: string;
   event_location: string;
   event_category: string;
+  event_id: number;
+  /** Nur Info: Bei der Anmeldung war das Event bereits ausgebucht. Steuert nichts. */
   is_waitlist: boolean;
+  /**
+   * Alle Plätze sind durch bestätigte Anmeldungen belegt. Eine offene
+   * Anmeldung kann dann nicht bezahlen – sie wartet, bis ein Platz frei wird.
+   */
+  event_full: boolean;
   /** Zeitpunkt der Zahlung (null = noch nicht bezahlt) */
   paid_at: string | null;
   /** Eigener Stornozeitpunkt des Events (null = 24-Stunden-Regel) */
@@ -283,6 +321,8 @@ export interface RegistrationStatusInfo {
   qr_code: string | null;
   checked_in_at: string | null;
   persons: RegistrationPerson[];
+  /** Ermäßigungsanträge dieser Anmeldung (nur über die Status-API, ohne Datei). */
+  discount_requests?: DiscountRequestInfo[];
 }
 
 export interface CheckinParticipant {
@@ -445,19 +485,13 @@ export interface EventCreateInput {
   parking_location?: string;
   price: string;
   entry_price?: number | null;
-  /** Stripe Price ID the amount came from (null = manually maintained) */
-  stripe_price_id?: string | null;
   /** Kinderbetrag in Euro: null = Erwachsenenpreis, 0 = kostenlos. */
   child_entry_price?: number | null;
   child_price?: string | null;
-  /** Stripe Price ID für Kinder, auch für einen Preis von 0 Euro. */
-  stripe_child_price_id?: string | null;
   dress_code: string;
   max_participants: number;
   /** Max persons per email address (default 5) */
   max_per_email?: number;
-  /** Optional URL for post-event feedback survey */
-  survey_url?: string | null;
   /** Eigener Stornozeitpunkt "YYYY-MM-DDTHH:MM" (null = 24 Stunden vor Beginn) */
   cancellation_deadline?: string | null;
   images?: EventImageInput[];
@@ -468,7 +502,7 @@ export interface EventCreateInput {
  * Datenbank ermittelt. Der Browser schickt nur den Token, nie einen Betrag
  * und nie eine Personenanzahl.
  */
-export interface CheckoutInfo {
+export interface CheckoutInfo extends Partial<Omit<EventStripeCatalog, "stripe_price_id" | "stripe_child_price_id" | "stripe_tier_products">> {
   registration_created_unix?: number;
   registration_id: number;
   email: string | null;
@@ -484,12 +518,14 @@ export interface CheckoutInfo {
   stripe_price_id: string | null;
   child_entry_price: number | null;
   stripe_child_price_id: string | null;
-  /** Warteliste: es gab bei der Anmeldung keinen freien Platz */
+  /** Nur Info: Bei der Anmeldung war das Event bereits ausgebucht. Steuert nichts. */
   is_waitlist: boolean;
+  /** Alle Plätze sind durch bestätigte Anmeldungen belegt – offene Anmeldungen zahlen dann nicht. */
+  event_full: boolean;
   /** Aktive, also nicht stornierte Personen dieser Anmeldung */
   person_count: number;
   child_count: number;
-  persons: Array<{ id: string; is_child: boolean }>;
+  persons: Array<{ id: string; is_child: boolean; discount?: Discount | null }>;
 }
 
 /**
@@ -660,4 +696,139 @@ export interface HelperInput {
   qualifications: HelperQualification[];
   notes?: string | null;
   is_active?: boolean;
+}
+
+// ─── Ermäßigungen (§ 3) ───────────────────────────────────
+
+/**
+ * Eine Person, die eine Ermäßigung erhält. Der Nachweis wird nur vermerkt,
+ * nie gespeichert – eine Schwerbehinderung ist ein Gesundheitsdatum (Art. 9 DSGVO).
+ * Vorname + Nachname + E-Mail identifizieren die Person (eindeutig in der DB).
+ */
+export interface DiscountHolder {
+  id: number;
+  first_name: string;
+  last_name: string;
+  /** Kleingeschrieben – Grundlage für den späteren Abgleich mit Anmeldungen. */
+  email: string;
+  phone: string | null;
+  discount: Discount;
+  /** "YYYY-MM-DD": Tag, an dem der Nachweis gesehen wurde. */
+  proof_checked_at: string;
+  /** Admin, der den Nachweis geprüft hat – aus der Session, nie vom Browser. */
+  proof_checked_by: string;
+  /** "YYYY-MM-DD", null = unbefristet. */
+  valid_until: string | null;
+  notes: string | null;
+  /** Einwilligung zur Erkennung bei der Online-Anmeldung; ohne sie wird nicht erkannt. */
+  consented_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Was das Admin-Formular schickt, nach der Validierung (lib/discount-holders.ts). */
+export interface DiscountHolderInput {
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string | null;
+  discount: Discount;
+  proof_checked_at: string;
+  valid_until: string | null;
+  notes: string | null;
+}
+
+// ─── Event-Bewertungen ────────────────────────────────────
+
+export type ReviewWouldReturn = "ja" | "vielleicht" | "nein";
+export type ReviewSendKind = "initial" | "reminder";
+
+export interface EventReview {
+  id: number;
+  event_id: number;
+  registration_id: number;
+  rating: number;                        // 1–5
+  would_return: ReviewWouldReturn | null;
+  comment: string | null;
+  publish_consent: boolean;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Bewertung mit Namen des Verfassers – nur für Admins */
+export interface EventReviewWithAuthor extends EventReview {
+  first_name: string;
+  last_name: string;
+  email: string | null;
+  event_title?: string;                  // in Übersichten über mehrere Events
+}
+
+export interface ReviewStats {
+  responses: number;
+  average: number | null;                // eine Nachkommastelle, null ohne Antworten
+  distribution: Record<1 | 2 | 3 | 4 | 5, number>;
+  would_return: Record<ReviewWouldReturn, number>;
+}
+
+export interface EventReviewDashboard {
+  event: { id: number; title: string; date: string; status: string };
+  can_send: boolean;
+  /** "event_in_future" | "event_cancelled" | null */
+  send_blocked_reason: string | null;
+  checked_in_registrations: number;      // genehmigt, mindestens eine Person eingecheckt
+  without_email: number;                 // davon ohne E-Mail
+  requested: number;                     // review_requested_at gesetzt
+  pending_initial: number;               // eingecheckt, mit E-Mail, noch nicht angefragt
+  first_requested_at: string | null;
+  reminder_sent_at: string | null;       // events.review_reminder_sent_at
+  reminder_candidates: number;           // angefragt, keine Antwort, Fenster offen
+  stats: ReviewStats;
+  reviews: EventReviewWithAuthor[];      // neueste zuerst
+}
+
+export interface ReviewSendResult { kind: ReviewSendKind; sent: number; failed: number }
+
+/** Für die öffentliche Teilnehmerseite – keine internen IDs */
+export interface ReviewTokenInfo {
+  first_name: string;
+  event_title: string;
+  event_date: string;                    // YYYY-MM-DD
+  deadline: string;                      // ISO, review_requested_at + 14 Tage
+  is_open: boolean;
+  review: Pick<EventReview, "rating" | "would_return" | "comment" | "publish_consent"> | null;
+}
+
+export interface PublicTestimonial {
+  id: number;
+  name: string;                          // "Ahmet K."
+  rating: number;
+  comment: string;
+  event_title: string;
+  event_category: string;
+  event_date: string;
+}
+
+export interface PublicTestimonialsResponse {
+  average: number | null;                // über alle Bewertungen, null bei < 5 Bewertungen
+  count: number;
+  items: PublicTestimonial[];
+}
+
+export interface ReviewOverviewEvent {
+  event_id: number;
+  title: string;
+  date: string;
+  category: string;
+  requested: number;
+  responses: number;
+  response_rate: number | null;          // 0–1
+  average: number | null;
+  would_return_yes_rate: number | null;  // Anteil „ja“ unter den beantworteten Angaben
+}
+
+export interface ReviewOverviewResponse {
+  events: ReviewOverviewEvent[];         // neuestes Event zuerst, nur Events mit requested > 0
+  pending_approval: EventReviewWithAuthor[]; // Einwilligung + Kommentar, nicht veröffentlicht
+  published: EventReviewWithAuthor[];
 }

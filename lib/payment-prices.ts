@@ -11,12 +11,12 @@ export function personPricesTotal(prices: PersonPrices): number {
   return total;
 }
 
-export function createPersonPrices(
-  persons: Array<{ id: string; is_child: boolean }>,
-  adultCents: number,
-  childCents: number
+/** Betrag je Person aus `centsFor` – etwa calculatePersonsPrice(…).centsFor. */
+export function createPersonPrices<P extends { id: string }>(
+  persons: ReadonlyArray<P>,
+  centsFor: (person: P) => number
 ): PersonPrices {
-  const prices = Object.fromEntries(persons.map((person) => [person.id, person.is_child ? childCents : adultCents]));
+  const prices = Object.fromEntries(persons.map((person) => [person.id, centsFor(person)]));
   if (Object.keys(prices).length !== persons.length) throw new Error("Doppelte Person im Checkout.");
   personPricesTotal(prices);
   return prices;

@@ -2,9 +2,11 @@ import { getEventFull, updateEvent, deleteEvent } from "@/lib/db";
 import { invalidateCache } from "@/lib/cache";
 import { NextRequest, NextResponse } from "next/server";
 import type { EventCreateInput } from "@/lib/types";
-import { normalizePrice, normalizeStripePriceId } from "@/lib/price";
+import { normalizeManualChildPrice, normalizePrice } from "@/lib/price";
 import { validateCancellationDeadline } from "@/lib/cancellation";
-import { resolveChildPrice } from "@/lib/child-price";
+import { archiveEventStripeProducts, syncStoredEventCatalog } from "@/lib/stripe-catalog";
+import { stripeProductUrl } from "@/lib/stripe";
+import { onCapacityChanged } from "@/lib/waitlist";
 
 export async function GET(
   _request: NextRequest,
@@ -16,7 +18,11 @@ export async function GET(
     if (!event) {
       return NextResponse.json({ error: "Event nicht gefunden." }, { status: 404 });
     }
-    return NextResponse.json(event);
+    // Links ins Dashboard entstehen hier, weil der Modus (Test/Live) im Schlüssel steckt.
+    const stripe_product_urls = Object.fromEntries(
+      Object.entries(event.stripe_tier_products ?? {}).map(([tier, productId]) => [tier, stripeProductUrl(productId)])
+    );
+    return NextResponse.json({ ...event, stripe_product_urls });
   } catch (error) {
     console.error("Fehler beim Laden des Events:", error);
     return NextResponse.json({ error: "Event konnte nicht geladen werden." }, { status: 500 });
@@ -51,13 +57,12 @@ export async function PUT(
     let childPrice = {
       child_entry_price: existing.child_entry_price ?? null,
       child_price: existing.child_price ?? null,
-      stripe_child_price_id: existing.stripe_child_price_id ?? null,
     };
-    if (body.stripe_child_price_id !== undefined || body.child_entry_price !== undefined || body.child_price !== undefined) {
+    if (body.child_entry_price !== undefined || body.child_price !== undefined) {
       try {
-        childPrice = await resolveChildPrice(body);
+        childPrice = normalizeManualChildPrice(body);
       } catch (error) {
-        return NextResponse.json({ error: error instanceof Error ? error.message : "Kinderpreis konnte nicht geladen werden." }, { status: 400 });
+        return NextResponse.json({ error: error instanceof Error ? error.message : "Ungültiger Kinderpreis." }, { status: 400 });
       }
     }
     await updateEvent(eventId, {
@@ -70,19 +75,24 @@ export async function PUT(
       parking_location: body.parking_location?.trim() || undefined,
       price: price.price,
       entry_price: price.entry_price,
-      stripe_price_id: normalizeStripePriceId(body.stripe_price_id, price.entry_price),
       ...childPrice,
       dress_code: (body.dress_code || "").trim(),
       max_participants: body.max_participants,
       max_per_email: body.max_per_email,
-      survey_url: body.survey_url?.trim() || null,
       cancellation_deadline: body.cancellation_deadline?.trim() || null,
       images: Array.isArray(body.images) ? body.images : undefined,
     });
 
     // Geändertes Event kann die öffentliche Liste betreffen → Cache invalidieren
     invalidateCache("events:");
-    return NextResponse.json({ message: "Event aktualisiert!" });
+    // Mehr Plätze → die Warteliste bekommt eine Mail; weniger → offene
+    // Bezahlfenster schließen, wenn das Event jetzt voll ist.
+    if (Number(body.max_participants) !== Number(existing.max_participants)) {
+      await onCapacityChanged(eventId, existing.current_participants >= existing.max_participants);
+    }
+    // Titel, Datum oder Preise können sich geändert haben – Stripe nachziehen.
+    const stripe = await syncStoredEventCatalog(eventId);
+    return NextResponse.json({ message: "Event aktualisiert!", stripe });
   } catch (error) {
     console.error("Fehler beim Aktualisieren:", error);
     return NextResponse.json({ error: "Event konnte nicht aktualisiert werden." }, { status: 500 });
@@ -104,6 +114,7 @@ export async function DELETE(
     await deleteEvent(eventId);
     // Gelöschtes Event aus öffentlicher Liste entfernen → Cache invalidieren
     invalidateCache("events:");
+    await archiveEventStripeProducts(existing);
     return NextResponse.json({ message: "Event gelöscht!" });
   } catch (error) {
     console.error("Fehler beim Löschen:", error);

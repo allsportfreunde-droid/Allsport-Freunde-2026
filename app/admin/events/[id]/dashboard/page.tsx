@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { flushSync } from "react-dom";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   CheckCircle2,
   Clock,
@@ -28,21 +28,23 @@ import {
   Banknote,
   Euro,
   Hourglass,
-  Mail,
   ChevronDown,
   Smartphone,
   PenLine,
+  Star,
 } from "lucide-react";
 import ChildBadge from "@/components/ChildBadge";
 import PaidBadge from "@/components/PaidBadge";
 import RegistrationDetailButton from "@/components/RegistrationDetailButton";
 import { LastNameInput } from "@/components/ui/LastNameInput";
+import ReviewTab from "@/components/admin/ReviewTab";
 import type {
   CheckinParticipant,
   CheckinStatusResponse,
   EventFinancials,
   EventDonation,
   WaitlistEntry,
+  EventReviewDashboard,
 } from "@/lib/types";
 import { formatEuro } from "@/lib/finance";
 
@@ -90,6 +92,7 @@ const EMPTY_FORM: WalkInForm = {
 export default function CheckinDashboardPage() {
   const { id: eventId } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [data, setData] = useState<CheckinStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -155,8 +158,35 @@ export default function CheckinDashboardPage() {
   const [waitlistError, setWaitlistError] = useState<string | null>(null);
 
   // Tab state
-  type Tab = "anmeldungen" | "warteliste" | "finanzen" | "spenden";
-  const [activeTab, setActiveTab] = useState<Tab>("anmeldungen");
+  type Tab = "anmeldungen" | "warteliste" | "finanzen" | "spenden" | "review";
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    const tab = searchParams.get("tab");
+    return tab && ["anmeldungen", "warteliste", "finanzen", "spenden", "review"].includes(tab) ? tab as Tab : "anmeldungen";
+  });
+  const [reviewBadge, setReviewBadge] = useState<Pick<EventReviewDashboard, "requested" | "pending_initial"> | null>(null);
+  const reviewBadgeVersion = useRef(0);
+  const updateReviewBadge = useCallback((next: EventReviewDashboard) => {
+    if (next.event.id !== Number(eventId)) return;
+    ++reviewBadgeVersion.current;
+    setReviewBadge({ requested: next.requested, pending_initial: next.pending_initial });
+  }, [eventId]);
+
+  // Einmaliger Badge-Stand; der Review-Tab meldet spätere Änderungen selbst.
+  useEffect(() => {
+    const controller = new AbortController();
+    const version = ++reviewBadgeVersion.current;
+    setReviewBadge(null);
+    void fetch(`/api/admin/events/${eventId}/review`, { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const next: EventReviewDashboard = await response.json();
+        if (!controller.signal.aborted && version === reviewBadgeVersion.current) {
+          setReviewBadge({ requested: next.requested, pending_initial: next.pending_initial });
+        }
+      })
+      .catch(() => { /* Der Review-Tab zeigt Ladefehler beim Öffnen an. */ });
+    return () => controller.abort();
+  }, [eventId]);
 
   // Tab bar is horizontally scrollable on mobile – keep the active tab in view
   const tabBarRef = useRef<HTMLDivElement>(null);
@@ -590,29 +620,6 @@ export default function CheckinDashboardPage() {
     }
   }
 
-  /**
-   * Bietet einer Wartelisten-Anmeldung einen frei gewordenen Platz an. Die
-   * Anmeldung bleibt offen – sie wird nur zahlbar und bekommt eine E-Mail.
-   */
-  async function handleWaitlistOffer(registrationId: number) {
-    setWaitlistRegLoadingId(registrationId);
-    setWaitlistError(null);
-    try {
-      const res = await fetch("/api/checkin/waitlist/offer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ registrationId }),
-      });
-      const body = await res.json();
-      if (!res.ok) setWaitlistError(body.error ?? "Fehler beim Anbieten des Platzes.");
-      else await fetchStatus();
-    } catch {
-      setWaitlistError("Netzwerkfehler.");
-    } finally {
-      setWaitlistRegLoadingId(null);
-    }
-  }
-
   async function handleUndo(participantId: number) {
     setUndoId(participantId);
     setError(null);
@@ -927,6 +934,7 @@ export default function CheckinDashboardPage() {
                 {
                   key: "anmeldungen" as const,
                   label: "Anmeldungen",
+                  shortLabel: "Liste",
                   icon: <Users className="w-4 h-4" />,
                   badge: data.missing > 0 ? String(data.missing) : null,
                   badgeColor: "bg-amber-500",
@@ -934,6 +942,7 @@ export default function CheckinDashboardPage() {
                 {
                   key: "warteliste" as const,
                   label: "Warteliste",
+                  shortLabel: "Warten",
                   icon: <Hourglass className="w-4 h-4" />,
                   badge: data.waitlist_persons > 0 ? String(data.waitlist_persons) : null,
                   badgeColor: "bg-amber-600",
@@ -941,6 +950,7 @@ export default function CheckinDashboardPage() {
                 {
                   key: "finanzen" as const,
                   label: "Finanzen",
+                  shortLabel: "Finanzen",
                   icon: <Euro className="w-4 h-4" />,
                   badge: financials?.cash_counted != null ? "✓" : null,
                   badgeColor: "bg-green-600",
@@ -948,11 +958,20 @@ export default function CheckinDashboardPage() {
                 {
                   key: "spenden" as const,
                   label: "Spenden",
+                  shortLabel: "Spenden",
                   icon: <Heart className="w-4 h-4" />,
                   badge: (financials?.donation_count ?? 0) > 0 ? String(financials!.donation_count) : null,
                   badgeColor: "bg-rose-500",
                 },
-              ] as { key: Tab; label: string; icon: React.ReactNode; badge: string | null; badgeColor: string }[]
+                {
+                  key: "review" as const,
+                  label: "Review",
+                  shortLabel: "Review",
+                  icon: <Star className="w-4 h-4" />,
+                  badge: reviewBadge && reviewBadge.requested > 0 ? (reviewBadge.pending_initial > 0 ? String(reviewBadge.pending_initial) : "✓") : null,
+                  badgeColor: reviewBadge && reviewBadge.pending_initial > 0 ? "bg-amber-500" : "bg-green-600",
+                },
+              ] as { key: Tab; label: string; shortLabel: string; icon: React.ReactNode; badge: string | null; badgeColor: string }[]
             ).map((tab) => (
               <button
                 key={tab.key}
@@ -969,13 +988,7 @@ export default function CheckinDashboardPage() {
                 {tab.icon}
                 <span className="hidden sm:inline">{tab.label}</span>
                 <span className="sm:hidden">
-                  {tab.key === "anmeldungen"
-                    ? "Liste"
-                    : tab.key === "warteliste"
-                      ? "Warten"
-                      : tab.key === "finanzen"
-                        ? "Finanzen"
-                        : "Spenden"}
+                  {tab.shortLabel}
                 </span>
                 {tab.badge && (
                   <span className={`${tab.badgeColor} text-white text-xs rounded-full min-w-[1.25rem] h-5 px-1 flex items-center justify-center font-bold leading-none`}>
@@ -1071,10 +1084,10 @@ export default function CheckinDashboardPage() {
                   Warteliste – noch nicht bestätigte Anmeldungen
                 </p>
                 <p className="text-xs text-amber-700 mt-1">
-                  Diese Anmeldungen sind eingegangen, als das Event bereits ausgebucht war.
-                  Wird ein Platz frei, biete ihn mit „Platz anbieten“ an: die Anmeldung
-                  kann dann bezahlen und bekommt eine E-Mail. „Bestätigen“ überspringt die
-                  Zahlung und schickt direkt die Bestätigung mit QR-Code.
+                  Offene Anmeldungen belegen keinen Platz – den bekommt, wer zuerst bezahlt.
+                  Wird durch eine Stornierung ein Platz frei, bekommen alle Unbezahlten
+                  automatisch eine E-Mail. „Bestätigen“ überspringt die Zahlung und schickt
+                  direkt die Bestätigung mit QR-Code.
                 </p>
               </div>
 
@@ -1101,7 +1114,6 @@ export default function CheckinDashboardPage() {
                     entry={entry}
                     position={waitlist.indexOf(entry) + 1}
                     onConfirm={handleWaitlistConfirm}
-                    onOffer={handleWaitlistOffer}
                     regLoadingId={waitlistRegLoadingId}
                     personLoadingId={waitlistPersonLoadingId}
                   />
@@ -1366,6 +1378,8 @@ export default function CheckinDashboardPage() {
               )}
             </div>
           )}
+          {/* ── Tab: Review ── */}
+          {activeTab === "review" && <ReviewTab key={eventId} eventId={Number(eventId)} onChanged={updateReviewBadge} />}
         </>
       )}
 
@@ -2074,7 +2088,6 @@ function WaitlistRow({
   entry,
   position,
   onConfirm,
-  onOffer,
   regLoadingId,
   personLoadingId,
 }: {
@@ -2084,7 +2097,6 @@ function WaitlistRow({
     registrationId: number,
     options?: { personIds?: string[]; checkinAll?: boolean }
   ) => void;
-  onOffer: (registrationId: number) => void;
   regLoadingId: number | null;
   personLoadingId: string | null;
 }) {
@@ -2114,7 +2126,7 @@ function WaitlistRow({
                 </span>
               ) : (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 leading-none">
-                  Platz angeboten
+                  Zahlung offen
                 </span>
               )}
             </p>
@@ -2130,21 +2142,6 @@ function WaitlistRow({
 
         <div className="flex items-center gap-2 shrink-0">
           <RegistrationDetailButton registrationId={entry.id} />
-          {entry.is_waitlist && (
-            <button
-              onClick={() => onOffer(entry.id)}
-              disabled={anyBusy}
-              title="Platz anbieten – die Anmeldung wird zahlbar und bekommt eine E-Mail"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-blue-200 hover:border-blue-300 hover:bg-blue-50 text-blue-700 rounded-lg transition-colors disabled:opacity-50"
-            >
-              {regBusy ? (
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Mail className="w-3.5 h-3.5" />
-              )}
-              Platz anbieten
-            </button>
-          )}
           <button
             onClick={() => onConfirm(entry.id)}
             disabled={anyBusy}

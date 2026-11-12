@@ -29,6 +29,7 @@ import {
   priceFromAmount,
   type PriceFields,
 } from "@/lib/price";
+import { activeTiers, calculateTierPrices, DISCOUNTS, TIER_PRICE_COLUMNS, type PriceTier } from "@/lib/price-tiers";
 
 interface EventFormProps {
   event?: EventWithRegistrations;
@@ -58,30 +59,37 @@ function validateImageUrl(url: string): Promise<boolean> {
 }
 
 /**
- * Eingabemodus für den Preis. Alle drei münden in dieselben zwei DB-Felder,
- * siehe lib/price.ts.
+ * Eingabemodus für den Preis. Beide münden in dieselben zwei DB-Felder,
+ * siehe lib/price.ts. Die Stripe-Preise entstehen daraus beim Speichern
+ * auf dem Server (lib/stripe-catalog.ts) – hier wird keine ID gepflegt.
  */
-type PriceMode = "amount" | "stripe" | "text";
+type PriceMode = "amount" | "text";
+
+/** Kinderpreis: wie Erwachsene (kein eigener Betrag), fester Betrag oder Freitext mit Betrag. */
+type ChildPriceMode = "same" | "amount" | "text";
 
 /** Leitet den passenden Eingabemodus aus einem bestehenden Datensatz ab. */
 function derivePriceState(
-  source?: { price?: string; entry_price?: number | null; stripe_price_id?: string | null } | null
-): { mode: PriceMode; cents: number; text: string; stripeId: string } {
+  source?: { price?: string; entry_price?: number | null } | null
+): { mode: PriceMode; cents: number; text: string } {
   const text = (source?.price ?? "").trim();
   const amount = source?.entry_price ?? null;
   const textAmount = text ? parsePriceText(text) : null;
-  const stripeId = source?.stripe_price_id ?? "";
 
-  // Eine hinterlegte Price ID bedeutet: der Betrag kam aus Stripe
-  if (stripeId) {
-    return { mode: "stripe", cents: centsFromAmount(amount ?? textAmount), text: "", stripeId };
-  }
   // Kein Text, ein reiner Betrag oder schlicht "Kostenlos" → Betragsmodus
   if (!text || textAmount != null || (text === FREE_PRICE_LABEL && amount == null)) {
-    return { mode: "amount", cents: centsFromAmount(amount ?? textAmount), text: "", stripeId: "" };
+    return { mode: "amount", cents: centsFromAmount(amount ?? textAmount), text: "" };
   }
   // Echter Freitext – der Betrag bleibt als Berechnungsgrundlage erhalten
-  return { mode: "text", cents: centsFromAmount(amount), text, stripeId: "" };
+  return { mode: "text", cents: centsFromAmount(amount), text };
+}
+
+/** Hat das gespeicherte Event für jede benötigte Stufe ein Stripe-Produkt mit Preis? */
+function hasCompleteStripeCatalog(event?: EventWithRegistrations): boolean {
+  if (!event) return false;
+  return activeTiers(event).every(
+    (tier) => !!event.stripe_tier_products?.[tier] && !!event[TIER_PRICE_COLUMNS[tier]]
+  );
 }
 
 /** Baut die beiden DB-Felder aus dem aktuellen Eingabezustand. */
@@ -114,90 +122,52 @@ export default function EventForm({ event }: EventFormProps) {
     dress_code: event?.dress_code ?? "",
     max_participants: event?.max_participants ?? 20,
     max_per_email: event?.max_per_email ?? 5,
-    survey_url: event?.survey_url ?? null,
     cancellation_deadline: event?.cancellation_deadline ?? null,
   });
   const [submitting, setSubmitting] = useState(false);
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
   const initialPrice = derivePriceState(event);
-  // Beim Anlegen ist Stripe der vorgesehene Weg; beim Bearbeiten richtet sich
-  // der Modus nach dem, was gespeichert ist.
-  const [priceMode, setPriceMode] = useState<PriceMode>(isEdit ? initialPrice.mode : "stripe");
+  const [priceMode, setPriceMode] = useState<PriceMode>(initialPrice.mode);
   const [priceCents, setPriceCents] = useState(initialPrice.cents);
   const [priceText, setPriceText] = useState(initialPrice.text);
-  const [stripePriceId, setStripePriceId] = useState(initialPrice.stripeId);
-  // Nur eine erfolgreich geladene ID darf gespeichert werden – eine bloß
-  // getippte sagt nichts darüber aus, ob sie zum Betrag passt.
-  const [loadedStripePriceId, setLoadedStripePriceId] = useState(initialPrice.stripeId);
-  const [stripePriceLoading, setStripePriceLoading] = useState(false);
-  const [stripePriceError, setStripePriceError] = useState<string | null>(null);
-  const [childStripePriceId, setChildStripePriceId] = useState(event?.stripe_child_price_id ?? "");
-  const [childPrice, setChildPrice] = useState<{ id: string; amount: number } | null>(
-    event?.stripe_child_price_id && event.child_entry_price != null
-      ? { id: event.stripe_child_price_id, amount: event.child_entry_price }
-      : null
-  );
-  const [childPriceLoading, setChildPriceLoading] = useState(false);
-  const [childPriceError, setChildPriceError] = useState<string | null>(null);
-  const [childPriceMode, setChildPriceMode] = useState<PriceMode>(
-    event?.stripe_child_price_id ? "stripe" : event?.child_price ? "text" : event?.child_entry_price != null ? "amount" : "stripe"
+  const [childPriceMode, setChildPriceMode] = useState<ChildPriceMode>(
+    event?.child_entry_price == null ? "same" : event.child_price ? "text" : "amount"
   );
   const [childPriceCents, setChildPriceCents] = useState(centsFromAmount(event?.child_entry_price));
   const [childPriceText, setChildPriceText] = useState(event?.child_price ?? "");
-  const childPriceReady = childPriceMode !== "stripe" || (!childPriceLoading && (
-    !childStripePriceId.trim() || childPrice?.id === childStripePriceId.trim()
-  ));
-
-  async function loadChildStripePrice() {
-    const id = childStripePriceId.trim();
-    if (!id || childPriceLoading) return;
-    setChildPriceLoading(true);
-    setChildPriceError(null);
-    setChildPrice(null);
-    try {
-      const res = await fetch(`/api/admin/stripe/price?kind=child&id=${encodeURIComponent(id)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Kinderpreis konnte nicht geladen werden.");
-      setChildPrice({ id: data.stripe_price_id, amount: data.unit_amount / 100 });
-      setChildPriceCents(data.unit_amount);
-    } catch (error) {
-      setChildPriceError(error instanceof Error ? error.message : "Kinderpreis konnte nicht geladen werden.");
-    } finally {
-      setChildPriceLoading(false);
-    }
-  }
-
-  const loadStripePrice = useCallback(async (priceId: string) => {
-    if (!priceId.trim()) {
-      setStripePriceError(null);
-      return;
-    }
-    setStripePriceLoading(true);
-    setStripePriceError(null);
-    try {
-      const res = await fetch(`/api/admin/stripe/price?id=${encodeURIComponent(priceId.trim())}`);
-      const data = await res.json();
-      if (!res.ok) {
-        setStripePriceError(data.error || "Preis konnte nicht geladen werden.");
-        setLoadedStripePriceId("");
-        return;
-      }
-      // unit_amount ist Stripes Cent-Betrag – exakt unser internes Format
-      setPriceCents(data.unit_amount);
-      setLoadedStripePriceId(data.stripe_price_id);
-    } catch {
-      setStripePriceError("Verbindungsfehler beim Laden des Preises.");
-      setLoadedStripePriceId("");
-    } finally {
-      setStripePriceLoading(false);
-    }
-  }, []);
 
   // Was am Ende in die DB geht – aus genau einer Quelle abgeleitet.
   const priceFields = priceFieldsFor(priceMode, priceCents, priceText);
-  // Die ID gilt nur im Stripe-Modus; wer den Modus wechselt, verwirft sie.
-  const stripePriceIdToSave =
-    priceMode === "stripe" && priceFields.entry_price != null ? loadedStripePriceId : null;
+  // null = Kinder zahlen den Erwachsenenpreis; 0 = kostenlos.
+  const childEntryPrice = childPriceMode === "same" ? null : amountFromCents(childPriceCents);
+  // Dieselbe Rechnung, mit der der Server die Stripe-Preise anlegt.
+  const tierPrices = calculateTierPrices({ ...priceFields, child_entry_price: childEntryPrice });
+  const savedTierPrices = event ? calculateTierPrices(event) : null;
+  const separateChildPrice = childEntryPrice != null;
+  // Abgeglichen ist nur, was gespeichert ist: andere Beträge oder ein hinzugekommener
+  // bzw. entfallener Kinderpreis brauchen erst einen neuen Abgleich.
+  const stripeCatalogCurrent =
+    hasCompleteStripeCatalog(event) &&
+    JSON.stringify(tierPrices) === JSON.stringify(savedTierPrices) &&
+    (event?.child_entry_price != null) === separateChildPrice;
+  const hasStripeProducts =
+    !!event?.stripe_product_id || Object.keys(event?.stripe_tier_products ?? {}).length > 0;
+  /** Betrag einer Stufe – verlinkt auf ihr Stripe-Produkt, solange der Abgleich aktuell ist. */
+  const tierPriceCell = (tier: PriceTier) => {
+    const amount = tierPrices ? formatEuro(tierPrices[tier] / 100) : "";
+    const url = stripeCatalogCurrent ? event?.stripe_product_urls?.[tier] : undefined;
+    return url ? (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Produkt im Stripe-Dashboard öffnen"
+        className="underline decoration-dotted underline-offset-2 hover:text-green-700"
+      >
+        {amount}
+      </a>
+    ) : amount;
+  };
 
   // ── Costs state (edit mode only, deferred save) ───────
   interface LocalCost { _key: string; id?: number; description: string; amount: number; }
@@ -350,10 +320,9 @@ export default function EventForm({ event }: EventFormProps) {
       max_per_email: tpl.max_per_email ?? 5,
     }));
     const tplPrice = derivePriceState(tpl);
+    setPriceMode(tplPrice.mode);
     setPriceCents(tplPrice.cents);
     setPriceText(tplPrice.text);
-    // Der Modus bleibt bewusst auf Stripe: Vorlagen gibt es nur beim Anlegen,
-    // und dort soll die Price ID immer der vorgesehene Weg sein.
 
     // Pre-fill images from template
     setImages(
@@ -375,10 +344,6 @@ export default function EventForm({ event }: EventFormProps) {
 
   const handleSubmit = async (e: React.FormEvent, publish: boolean) => {
     e.preventDefault();
-    if (!childPriceReady) {
-      toast("Bitte den Kinderpreis zuerst laden oder die Kinder-Preis-ID leeren.", "error");
-      return;
-    }
     setSubmitting(true);
 
     try {
@@ -395,9 +360,7 @@ export default function EventForm({ event }: EventFormProps) {
         body: JSON.stringify({
           ...formData,
           ...priceFields,
-          stripe_price_id: stripePriceIdToSave,
-          stripe_child_price_id: childPriceMode === "stripe" ? childStripePriceId.trim() || null : null,
-          child_entry_price: childPriceMode === "stripe" ? null : amountFromCents(childPriceCents),
+          child_entry_price: childEntryPrice,
           child_price: childPriceMode === "text" ? childPriceText.trim() || null : null,
           images: imagePayload,
           publish,
@@ -440,7 +403,13 @@ export default function EventForm({ event }: EventFormProps) {
         }
       }
 
-      if (publish) {
+      if (data.stripe?.status === "failed") {
+        // Das Event ist gespeichert; ohne Price IDs rechnet der Checkout mit dem Betrag selbst ab.
+        toast(
+          `Event gespeichert, aber die Stripe-Preise konnten nicht angelegt werden: ${data.stripe.error ?? "unbekannter Fehler"}. Beim nächsten Speichern wird es erneut versucht.`,
+          "error"
+        );
+      } else if (publish) {
         toast(isEdit ? "Event gespeichert und veröffentlicht!" : "Event erstellt und veröffentlicht!", "success");
       } else {
         toast(isEdit ? "Event gespeichert." : "Event als Entwurf gespeichert.", "success");
@@ -625,7 +594,6 @@ export default function EventForm({ event }: EventFormProps) {
                   <Label htmlFor="price_amount">Preis Erwachsene *</Label>
                   <div className="inline-flex rounded-md border p-0.5 text-xs">
                     {([
-                      ["stripe", "Stripe"],
                       ["amount", "Betrag"],
                       ["text", "Freitext"],
                     ] as const).map(([mode, label]) => (
@@ -640,26 +608,6 @@ export default function EventForm({ event }: EventFormProps) {
                     ))}
                   </div>
                 </div>
-
-                {priceMode === "stripe" && (
-                  <div className="flex gap-2">
-                    <Input
-                      value={stripePriceId}
-                      onChange={(e) => setStripePriceId(e.target.value)}
-                      onBlur={() => loadStripePrice(stripePriceId)}
-                      placeholder="price_1AbCdEfGhIjKlMnO"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={stripePriceLoading || !stripePriceId.trim()}
-                      onClick={() => loadStripePrice(stripePriceId)}
-                    >
-                      {stripePriceLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Laden"}
-                    </Button>
-                  </div>
-                )}
-                {stripePriceError && <p className="text-xs text-red-600">{stripePriceError}</p>}
 
                 {priceMode === "text" && (
                   <Input
@@ -679,7 +627,6 @@ export default function EventForm({ event }: EventFormProps) {
                   id="price_amount"
                   value={priceCents}
                   onChange={setPriceCents}
-                  disabled={priceMode === "stripe"}
                   aria-describedby="price_preview"
                 />
 
@@ -700,14 +647,14 @@ export default function EventForm({ event }: EventFormProps) {
                   <Label htmlFor="child_price_amount">Preis Kinder</Label>
                   <div className="inline-flex rounded-md border p-0.5 text-xs">
                     {([
-                      ["stripe", "Stripe"],
+                      ["same", "Wie Erwachsene"],
                       ["amount", "Betrag"],
                       ["text", "Freitext"],
                     ] as const).map(([mode, label]) => (
                       <button
                         key={mode}
                         type="button"
-                        disabled={childPriceLoading || submitting}
+                        disabled={submitting}
                         onClick={() => setChildPriceMode(mode)}
                         className={`px-2 py-1 rounded ${childPriceMode === mode ? "bg-gray-900 text-white" : "text-muted-foreground"}`}
                       >
@@ -716,31 +663,6 @@ export default function EventForm({ event }: EventFormProps) {
                     ))}
                   </div>
                 </div>
-                {childPriceMode === "stripe" && <div className="flex gap-2">
-                  <Input
-                    id="child_stripe_price_id"
-                    aria-label="Stripe-Preis-ID für Kinder"
-                    value={childStripePriceId}
-                    disabled={childPriceLoading || submitting}
-                    onChange={(e) => {
-                      setChildStripePriceId(e.target.value);
-                      setChildPrice(null);
-                      setChildPriceError(null);
-                    }}
-                    placeholder="price_1AbCdEfGhIjKlMnO"
-                    aria-describedby="child_price_preview"
-                    aria-invalid={!!childPriceError}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={childPriceLoading || submitting || !childStripePriceId.trim()}
-                    onClick={loadChildStripePrice}
-                  >
-                    {childPriceLoading ? <Loader2 className="w-4 h-4 animate-spin" aria-label="Kinderpreis wird geladen" /> : "Laden"}
-                  </Button>
-                </div>}
-                {childPriceMode === "stripe" && childPriceError && <p className="text-xs text-red-600">{childPriceError}</p>}
                 {childPriceMode === "text" && (
                   <>
                     <Input
@@ -758,15 +680,15 @@ export default function EventForm({ event }: EventFormProps) {
                 )}
                 <AmountInput
                   id="child_price_amount"
-                  value={childPriceMode === "stripe"
-                    ? centsFromAmount(childPrice?.amount ?? (!childStripePriceId.trim() ? priceFields.entry_price : null))
-                    : childPriceCents}
+                  value={childPriceMode === "same" ? centsFromAmount(priceFields.entry_price) : childPriceCents}
                   onChange={setChildPriceCents}
-                  disabled={childPriceMode === "stripe"}
+                  disabled={childPriceMode === "same"}
                   aria-describedby="child_price_preview"
                 />
                 <div id="child_price_preview" className="text-xs" aria-live="polite">
-                  {childPriceMode !== "stripe" ? (
+                  {childPriceMode === "same" ? (
+                    <p className="text-muted-foreground">Kinder zahlen den Erwachsenenpreis.</p>
+                  ) : (
                     <p className="text-muted-foreground">
                       Teilnehmer sehen:{" "}
                       <span className="font-medium text-foreground">
@@ -776,15 +698,64 @@ export default function EventForm({ event }: EventFormProps) {
                       </span>
                       {childPriceCents === 0 ? " · kostenlos" : " pro Kind"}
                     </p>
-                  ) : childPrice ? (
-                    <p className="font-medium">Kinder: {formatEuro(childPrice.amount)}{childPrice.amount === 0 ? " · kostenlos" : " pro Person"}</p>
-                  ) : childStripePriceId.trim() ? (
-                    <p className="text-muted-foreground">{childPriceLoading ? "Kinderpreis wird geladen …" : "Bitte den Kinderpreis vor dem Speichern laden."}</p>
-                  ) : (
-                    <p className="text-muted-foreground">Ohne Kinder-Preis-ID gilt der Erwachsenenpreis.</p>
                   )}
-                  {childPriceMode === "stripe" && <p className="text-muted-foreground mt-1">Für kostenlose Kinder eine Stripe-Preis-ID mit 0 € hinterlegen.</p>}
                 </div>
+              </div>
+
+              <div role="group" className="md:col-span-2 rounded-lg border bg-gray-50 p-3 space-y-2" aria-labelledby="tier_prices_title">
+                <p id="tier_prices_title" className="text-sm font-medium">Preise inkl. Ermäßigungen (§ 3)</p>
+                {tierPrices ? (
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs text-muted-foreground">
+                            <th className="font-normal py-1 pr-3"></th>
+                            <th className="font-normal py-1 pr-3 text-right">Normal</th>
+                            <th className="font-normal py-1 pr-3 text-right">−{DISCOUNTS.reduced_30.percent} %</th>
+                            <th className="font-normal py-1 text-right">−{DISCOUNTS.reduced_50.percent} %</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(separateChildPrice
+                            ? ([["adult", "Erwachsene"], ["child", "Kind"]] as const)
+                            : ([["adult", "Eintritt"]] as const)
+                          ).map(([base, label]) => (
+                            <tr key={base} className="border-t">
+                              <td className="py-1 pr-3">{label}</td>
+                              <td className="py-1 pr-3 text-right tabular-nums">{tierPriceCell(base)}</td>
+                              <td className="py-1 pr-3 text-right tabular-nums">{tierPriceCell(`${base}_reduced_30`)}</td>
+                              <td className="py-1 text-right tabular-nums">{tierPriceCell(`${base}_reduced_50`)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      −{DISCOUNTS.reduced_30.percent} %: {DISCOUNTS.reduced_30.reason} ·
+                      −{DISCOUNTS.reduced_50.percent} %: {DISCOUNTS.reduced_50.reason}
+                    </p>
+                    <p className="text-xs" aria-live="polite">
+                      {stripeCatalogCurrent ? (
+                        <span className="inline-flex items-center gap-1 text-green-700">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          In Stripe angelegt – ein Klick auf einen Betrag öffnet sein Produkt.
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          {hasStripeProducts
+                            ? `Beim Speichern werden die ${separateChildPrice ? "sechs" : "drei"} Stripe-Produkte aktualisiert – eines je Preis.`
+                            : `Beim Speichern entstehen in Stripe ${separateChildPrice ? "sechs" : "drei"} Produkte – eines je Preis.`}
+                        </span>
+                      )}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Kein verbindlicher Preis – es wird kein Stripe-Produkt angelegt
+                    {hasStripeProducts ? ", bestehende Stripe-Produkte werden beim Speichern archiviert" : ""}.
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -844,20 +815,6 @@ export default function EventForm({ event }: EventFormProps) {
                 />
                 <p className="text-xs text-muted-foreground">Wie viele Personen darf eine E-Mail-Adresse anmelden? (Standard: 5)</p>
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="survey_url">Feedback-Umfrage URL <span className="text-muted-foreground font-normal">(optional)</span></Label>
-              <Input
-                id="survey_url"
-                type="url"
-                value={formData.survey_url ?? ""}
-                onChange={(e) => update("survey_url", e.target.value.trim() || null)}
-                placeholder="https://umfrage.example.com/feedback"
-              />
-              <p className="text-xs text-muted-foreground">
-                Wenn hinterlegt, wird 1 Tag nach dem Event automatisch eine Feedback-E-Mail an alle bestätigten Teilnehmer gesendet.
-              </p>
             </div>
 
             <div className="space-y-2">

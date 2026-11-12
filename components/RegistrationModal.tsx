@@ -14,11 +14,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { EventWithRegistrations } from "@/lib/types";
-import { CheckCircle2, Euro, Loader2, Plus, X, Users } from "lucide-react";
+import { BadgePercent, CheckCircle2, Euro, Loader2, Plus, X, Users } from "lucide-react";
 import { LastNameInput } from "@/components/ui/LastNameInput";
 import HoneypotFields from "@/components/HoneypotFields";
 import { formatEuro } from "@/lib/finance";
-import { calculateRegistrationPrice, formatEventPrice } from "@/lib/price";
+import { formatEventPrice } from "@/lib/price";
+import { calculatePersonsPrice } from "@/lib/price-tiers";
+import { useDiscountPreview } from "@/components/registration/useDiscountPreview";
+import DiscountNotice from "@/components/registration/DiscountNotice";
+import PriceSummary from "@/components/PriceSummary";
+import DiscountRequestFields, {
+  emptyDiscountRequest,
+  isDiscountRequestComplete,
+  type DiscountRequestDraft,
+} from "@/components/registration/DiscountRequestFields";
+import ProofUpload from "@/components/registration/ProofUpload";
+import { uploadProof } from "@/components/registration/proofFile";
+import { calculateTierPrices, DISCOUNTS } from "@/lib/price-tiers";
+import { DISCOUNT_REQUEST_CONSENT_TEXT } from "@/lib/discount-requests";
 import { cancellationDeadline, formatDeadline } from "@/lib/cancellation";
 
 interface Person {
@@ -26,9 +39,18 @@ interface Person {
   lastName: string;
   /** true = Kind (U18). Default ist "Nein", also ein Erwachsener. */
   isChild: boolean;
+  /** Ermäßigungsantrag – nur für Personen, die nicht schon erkannt wurden. */
+  discountRequest: DiscountRequestDraft;
 }
 
-const emptyPerson = (): Person => ({ firstName: "", lastName: "", isChild: false });
+const emptyPerson = (): Person => ({ firstName: "", lastName: "", isChild: false, discountRequest: emptyDiscountRequest() });
+
+/** Fortschritt der Nachweis-Uploads nach dem Absenden. */
+interface UploadState {
+  running: boolean;
+  /** Je fehlgeschlagenem Upload: Name und Grund. */
+  failed: Array<{ name: string; requestId: number; error: string }>;
+}
 
 interface RegistrationModalProps {
   event: EventWithRegistrations | null;
@@ -52,10 +74,23 @@ export default function RegistrationModal({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [statusToken, setStatusToken] = useState<string | null>(null);
+  /** Entscheidung des Servers: Warteliste oder nicht – unabhängig vom Seitenstand. */
+  const [waitlisted, setWaitlisted] = useState<boolean | null>(null);
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
+  const [discountConsent, setDiscountConsent] = useState(false);
+  const [requestCount, setRequestCount] = useState(0);
+  const [uploadState, setUploadState] = useState<UploadState | null>(null);
 
   const maxPerEmail = event?.max_per_email ?? 5;
+  // Nur Vorschau – beim Absenden gleicht der Server selbst mit der Liste ab.
+  const discountPreview = useDiscountPreview(email, persons);
+  /** Beantragte Ermäßigung einer Person – nur, wenn sie nicht schon erkannt wurde. */
+  const requestedDiscount = (idx: number) => {
+    const draft = persons[idx]?.discountRequest;
+    return !discountPreview[idx] && draft?.open && draft.discount ? draft.discount : null;
+  };
+  const hasOpenRequest = persons.some((p, idx) => !discountPreview[idx] && p.discountRequest.open);
 
   const resetForm = () => {
     setEmail("");
@@ -65,8 +100,12 @@ export default function RegistrationModal({
     setError(null);
     setSuccess(false);
     setStatusToken(null);
+    setWaitlisted(null);
     setPayLoading(false);
     setPayError(null);
+    setDiscountConsent(false);
+    setRequestCount(0);
+    setUploadState(null);
   };
 
   const handleClose = (open: boolean) => {
@@ -88,10 +127,14 @@ export default function RegistrationModal({
     setPersons((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const updatePerson = (idx: number, field: keyof Person, value: string | boolean) => {
+  const updatePerson = (idx: number, field: "firstName" | "lastName" | "isChild", value: string | boolean) => {
     setPersons((prev) =>
       prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p))
     );
+  };
+
+  const updateDiscountRequest = (idx: number, draft: DiscountRequestDraft) => {
+    setPersons((prev) => prev.map((p, i) => (i === idx ? { ...p, discountRequest: draft } : p)));
   };
 
   // Der Server baut die Stripe-Session aus dem Token – hier wird bewusst
@@ -124,7 +167,21 @@ export default function RegistrationModal({
     if (!event) return;
 
     if (!accepted) {
-      setError("Bitte akzeptiere die Teilnahmebedingungen.");
+      setError("Bitte akzeptiere die Teilnahmebedingungen und bestätige, die Datenschutzerklärung zur Kenntnis genommen zu haben.");
+      return;
+    }
+
+    // Anträge nur für Personen, die nicht schon erkannt wurden.
+    const openRequests = persons.map((p, idx) =>
+      !discountPreview[idx] && p.discountRequest.open ? p.discountRequest : null
+    );
+    if (openRequests.some((draft) => draft && !isDiscountRequestComplete(draft))) {
+      setError("Bitte bei jeder beantragten Ermäßigung den Satz wählen und einen Nachweis anhängen – oder den Antrag entfernen.");
+      return;
+    }
+    const hasRequests = openRequests.some(Boolean);
+    if (hasRequests && !discountConsent) {
+      setError("Bitte willige ausdrücklich in die Speicherung der Nachweise ein, um eine Ermäßigung zu beantragen.");
       return;
     }
 
@@ -144,11 +201,16 @@ export default function RegistrationModal({
           event_id: event.id,
           email: email.trim(),
           phone: phone.trim(),
-          persons: persons.map((p) => ({
+          persons: persons.map((p, idx) => ({
             firstName: p.firstName.trim(),
             lastName: p.lastName.trim(),
             isChild: p.isChild,
+            // Der Server prüft selbst; die Datei folgt nach der Anmeldung.
+            discountRequest: openRequests[idx]
+              ? { discount: openRequests[idx]!.discount, remember: openRequests[idx]!.remember }
+              : undefined,
           })),
+          discountConsent,
           _hp,
           _ts,
         }),
@@ -163,7 +225,26 @@ export default function RegistrationModal({
 
       setSuccess(true);
       setStatusToken(data.status_token || null);
+      // Vor onSuccess setzen: Die geteilte Event-Seite lädt danach neu, und
+      // ein frisch belegter letzter Platz darf den Erfolgs-Screen nicht kippen.
+      setWaitlisted(typeof data.is_waitlist === "boolean" ? data.is_waitlist : null);
       onSuccess();
+
+      // Nachweise einzeln hochladen – autorisiert über den eben erhaltenen Token.
+      const created: Array<{ person_index: number; id: number }> = data.discount_requests ?? [];
+      setRequestCount(created.length);
+      if (created.length > 0 && data.status_token) {
+        setUploadState({ running: true, failed: [] });
+        const failed: UploadState["failed"] = [];
+        for (const { person_index, id } of created) {
+          const person = persons[person_index];
+          const file = person?.discountRequest.file;
+          const name = person ? `${person.firstName.trim()} ${person.lastName.trim()}` : "Person";
+          const result = file ? await uploadProof(data.status_token, id, file) : { ok: false as const, error: "Keine Datei" };
+          if (!result.ok) failed.push({ name, requestId: id, error: result.error });
+        }
+        setUploadState({ running: false, failed });
+      }
     } catch {
       setError("Verbindungsfehler. Bitte versuche es erneut.");
     } finally {
@@ -174,9 +255,33 @@ export default function RegistrationModal({
   if (!event) return null;
 
   const isFull = event.is_full ?? false;
+  // Nach dem Absenden zählt, was der Server entschieden hat.
+  const onWaitlist = waitlisted ?? isFull;
 
-  const pricing = calculateRegistrationPrice(event, persons.length, persons.filter((p) => p.isChild).length);
+  // Erkannte Ermäßigung gilt sofort, beantragte mit dem hochgeladenen Nachweis.
+  const pricedPersons = persons.map((p, idx) => ({
+    is_child: p.isChild,
+    discount: discountPreview[idx] ?? requestedDiscount(idx),
+  }));
+  const pricing = calculatePersonsPrice(event, pricedPersons);
   const totalPrice = pricing ? pricing.totalCents / 100 : null;
+  // Bezahlen erst, wenn alle Nachweise oben sind – erst dann gilt die beantragte Ermäßigung.
+  const proofsUploaded =
+    requestCount === 0 || (uploadState != null && !uploadState.running && uploadState.failed.length === 0);
+  // Ermäßigen lässt sich nur, wo es einen verbindlichen Preis gibt.
+  const discountsAvailable = calculateTierPrices(event) != null;
+  // Hinweis je Person nur, wenn es tatsächlich etwas zu ermäßigen gibt.
+  const discountNoticeFor = (idx: number) => {
+    const discount = pricedPersons[idx].discount;
+    const fullCents = pricing ? pricing.centsFor({ is_child: pricedPersons[idx].is_child, discount: null }) : null;
+    if (!discount || !pricing || !fullCents) return { discount: null, fullCents: null, reducedCents: null };
+    return {
+      discount,
+      fullCents,
+      reducedCents: pricing.centsFor(pricedPersons[idx]),
+      pending: !discountPreview[idx],
+    };
+  };
   // Bis wann storniert werden kann – entweder der am Event hinterlegte
   // Zeitpunkt oder 24 Stunden vor Beginn. Siehe lib/cancellation.ts.
   const deadline = cancellationDeadline({
@@ -192,10 +297,10 @@ export default function RegistrationModal({
           <div className="text-center py-6">
             <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" />
             <h3 className="text-xl font-bold text-gray-900 mb-2">
-              {isFull ? "Auf der Warteliste!" : "Anmeldung eingegangen!"}
+              {onWaitlist ? "Auf der Warteliste!" : "Anmeldung eingegangen!"}
             </h3>
             <p className="text-gray-600 mb-1">
-              {isFull
+              {onWaitlist
                 ? "Deine Anmeldung für die Warteliste wird nun geprüft:"
                 : "Deine Anmeldung wird nun geprüft:"}
             </p>
@@ -216,7 +321,7 @@ export default function RegistrationModal({
               <div className="bg-green-50 rounded-lg p-3 mb-3 text-left">
                 <p className="text-xs font-semibold text-green-700 mb-1">
                   {persons.length} {persons.length === 1 ? "Person" : "Personen"}{" "}
-                  {isFull ? "auf der Warteliste" : "angemeldet"}:
+                  {onWaitlist ? "auf der Warteliste" : "angemeldet"}:
                 </p>
                 {persons.map((p, i) => (
                   <p key={i} className="text-sm text-green-900">
@@ -226,22 +331,77 @@ export default function RegistrationModal({
               </div>
             )}
             <p className="text-sm text-amber-600 bg-amber-50 rounded-lg p-3 mb-4">
-              {isFull
-                ? "Du stehst auf der Warteliste. Wir melden uns per E-Mail, sobald ein Platz frei wird oder deine Anmeldung bestätigt wurde."
-                : "Du erhältst eine E-Mail, sobald deine Anmeldung bestätigt wurde."}
+              {onWaitlist
+                ? totalPrice != null && totalPrice > 0
+                  ? "Du stehst auf der Warteliste. Wird ein Platz frei, bekommst du eine E-Mail und kannst sofort bezahlen – den Platz bekommt, wer zuerst bezahlt."
+                  : "Du stehst auf der Warteliste. Wir melden uns per E-Mail, sobald ein Platz frei wird oder deine Anmeldung bestätigt wurde."
+                : totalPrice != null && totalPrice > 0
+                  ? "Verbindlich wird dein Platz mit der Zahlung – die freien Plätze gehen in der Reihenfolge der Zahlungen weg. Bezahle am besten gleich."
+                  : "Du erhältst eine E-Mail, sobald deine Anmeldung bestätigt wurde."}
             </p>
-            {statusToken && totalPrice != null && totalPrice > 0 && !isFull && (
+            {requestCount > 0 && (
+              <div
+                className={`border rounded-lg p-4 mb-4 text-left text-sm space-y-2 ${
+                  proofsUploaded ? "border-green-200 bg-green-50 text-green-900" : "border-amber-200 bg-amber-50 text-amber-900"
+                }`}
+                aria-live="polite"
+              >
+                <p className="font-semibold">
+                  {requestCount === 1 ? "Ermäßigung beantragt" : `${requestCount} Ermäßigungen beantragt`}
+                </p>
+                {uploadState?.running ? (
+                  <p className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Nachweise werden hochgeladen …
+                  </p>
+                ) : uploadState && uploadState.failed.length > 0 ? (
+                  <>
+                    <p>
+                      Mindestens ein Nachweis konnte nicht hochgeladen werden. Bitte wähle ihn hier direkt erneut aus –
+                      später nachreichen geht nicht, ohne Nachweis gilt der reguläre Preis.
+                    </p>
+                    <div className="space-y-3">
+                      {uploadState.failed.map(({ name, requestId, error: uploadError }) => (
+                        <div key={requestId} className="rounded-md border border-amber-200 bg-white/70 p-2.5 space-y-2">
+                          <p className="text-xs"><span className="font-semibold">{name}:</span> {uploadError}</p>
+                          {statusToken && (
+                            <ProofUpload
+                              statusToken={statusToken}
+                              requestId={requestId}
+                              hasProof={false}
+                              onUploaded={() => setUploadState((current) => current ? {
+                                ...current,
+                                failed: current.failed.filter((entry) => entry.requestId !== requestId),
+                              } : current)}
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p>{requestCount === 1 ? "Nachweis" : "Nachweise"} hochgeladen ✓ – die Ermäßigung ist eingerechnet.</p>
+                )}
+              </div>
+            )}
+            {statusToken && totalPrice != null && totalPrice > 0 && !onWaitlist && proofsUploaded && (
               <div className="border border-gray-200 rounded-lg p-4 mb-4 text-left">
                 <p className="text-sm font-semibold text-gray-900">
                   Anmeldung bestätigen
                 </p>
-                <p className="text-xs text-gray-500 mt-1 mb-3">
-                  {pricing?.breakdown}
-                  {" = "}
-                  <span className="font-semibold text-gray-900">
-                    {formatEuro(totalPrice)}
-                  </span>
-                </p>
+                {pricing?.hasDiscount ? (
+                  <div className="mt-2 mb-3">
+                    <PriceSummary pricing={pricing} />
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-500 mt-1 mb-3">
+                    {pricing?.breakdown}
+                    {" = "}
+                    <span className="font-semibold text-gray-900">
+                      {formatEuro(totalPrice)}
+                    </span>
+                  </p>
+                )}
                 {deadline && (
                   <p className="text-xs text-gray-500 mb-3">
                     Nach der Zahlung kannst du bis {formatDeadline(deadline)}
@@ -294,9 +454,9 @@ export default function RegistrationModal({
             <form onSubmit={handleSubmit} className="space-y-5">
               {isFull && (
                 <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg p-3">
-                  Das Event ist aktuell ausgebucht. Mit dieser Anmeldung setzen
-                  wir dich auf die Warteliste und melden uns, sobald ein Platz
-                  frei wird.
+                  Das Event ist aktuell ausgebucht. Mit dieser Anmeldung kommst
+                  du auf die Warteliste. Wird ein Platz frei, melden wir uns per
+                  E-Mail.
                 </div>
               )}
               {/* Contact */}
@@ -344,6 +504,24 @@ export default function RegistrationModal({
                     {persons.length} / {maxPerEmail}
                   </span>
                 </div>
+
+                {discountsAvailable && (
+                  <div className="flex items-start gap-2 rounded-lg border border-green-100 bg-green-50/60 px-3 py-2.5 text-xs text-gray-700">
+                    <BadgePercent className="mt-0.5 w-4 h-4 shrink-0 text-green-700" aria-hidden="true" />
+                    <div className="min-w-0">
+                      <p className="font-semibold text-gray-900">Ermäßigung nach § 3 möglich</p>
+                      <ul className="mt-1 space-y-0.5">
+                        <li>
+                          <span className="font-semibold text-green-800">−{DISCOUNTS.reduced_30.percent} %</span> bei Sozialleistungen
+                        </li>
+                        <li>
+                          <span className="font-semibold text-green-800">−{DISCOUNTS.reduced_50.percent} %</span> bei Schwerbehinderung (GdB ab 50)
+                        </li>
+                      </ul>
+                      <p className="mt-1.5 text-gray-600">Bei der jeweiligen Person beantragen.</p>
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-3">
                   {persons.map((person, idx) => (
@@ -433,6 +611,15 @@ export default function RegistrationModal({
                           </span>
                         </div>
                       </div>
+                      <DiscountNotice {...discountNoticeFor(idx)} />
+                      {/* Wer schon erkannt ist, braucht keinen Antrag. */}
+                      {discountsAvailable && !discountPreview[idx] && (
+                        <DiscountRequestFields
+                          value={person.discountRequest}
+                          onChange={(draft) => updateDiscountRequest(idx, draft)}
+                          disabled={submitting}
+                        />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -450,51 +637,77 @@ export default function RegistrationModal({
               </div>
 
               {/* Consent */}
-              <div className="flex items-start gap-2">
-                <input
-                  type="checkbox"
-                  id="accepted"
-                  checked={accepted}
-                  onChange={(e) => setAccepted(e.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500 cursor-pointer"
-                />
-                <Label htmlFor="accepted" className="text-sm text-gray-600 cursor-pointer">
-                  Ich akzeptiere die{" "}
-                  <Link
-                    href="/teilnahmebedingungen"
-                    target="_blank"
-                    className="underline hover:text-gray-900"
-                  >
-                    Teilnahmebedingungen
-                  </Link>{" "}
-                  und bin damit einverstanden, dass meine Daten zur
-                  Organisation des Events verwendet werden. *
-                </Label>
+              <div className="space-y-3">
+                <div className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    id="accepted"
+                    checked={accepted}
+                    onChange={(e) => setAccepted(e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500 cursor-pointer"
+                  />
+                  <Label htmlFor="accepted" className="text-sm text-gray-600 cursor-pointer">
+                    Ich akzeptiere die{" "}
+                    <Link
+                      href="/teilnahmebedingungen"
+                      target="_blank"
+                      className="underline hover:text-gray-900"
+                    >
+                      Teilnahmebedingungen
+                    </Link>{" "}
+                    und habe die{" "}
+                    <Link
+                      href="/datenschutz"
+                      target="_blank"
+                      className="underline hover:text-gray-900"
+                    >
+                      Datenschutzerklärung
+                    </Link>{" "}
+                    zur Kenntnis genommen. *
+                  </Label>
+                </div>
+
+                {hasOpenRequest && (
+                  <div className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      id="discount-consent"
+                      checked={discountConsent}
+                      onChange={(e) => setDiscountConsent(e.target.checked)}
+                      className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 text-green-600 focus:ring-green-500 cursor-pointer"
+                    />
+                    <Label htmlFor="discount-consent" className="text-sm text-gray-600 cursor-pointer">
+                      {DISCOUNT_REQUEST_CONSENT_TEXT} Mehr dazu in der{" "}
+                      <Link href="/datenschutz" target="_blank" className="underline hover:text-gray-900">
+                        Datenschutzerklärung
+                      </Link>
+                      . *
+                    </Label>
+                  </div>
+                )}
               </div>
 
               {/* Kosten */}
               <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="flex items-center gap-2 text-sm text-gray-600">
-                    <Euro className="w-4 h-4 text-gray-400" />
-                    {totalPrice != null ? (
-                      <>
-                        {pricing?.breakdown}
-                      </>
-                    ) : (
-                      "Kosten"
-                    )}
-                  </span>
-                  <span className="text-base font-semibold text-gray-900">
-                    {totalPrice != null ? formatEuro(totalPrice) : formatEventPrice(event)}
-                  </span>
-                </div>
+                {pricing ? (
+                  <PriceSummary pricing={pricing} />
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="flex items-center gap-2 text-sm text-gray-600">
+                      <Euro className="w-4 h-4 text-gray-400" />
+                      Kosten
+                    </span>
+                    <span className="text-base font-semibold text-gray-900">
+                      {formatEventPrice(event)}
+                    </span>
+                  </div>
+                )}
                 {event.child_price && <p className="mt-1 text-xs text-gray-500">Kinder: {event.child_price}</p>}
                 {totalPrice != null && totalPrice > 0 && (
                   <p className="mt-1 text-xs text-gray-500">
                     {isFull
-                      ? "Der Betrag wird erst fällig, wenn du von der Warteliste nachrückst."
-                      : "Der Betrag wird mit der Bestätigung deiner Anmeldung fällig."}
+                      ? "Bezahlen kannst du erst, wenn ein Platz frei wird – dann bekommst du eine E-Mail. Den Platz bekommt, wer zuerst bezahlt."
+                      : "Verbindlich wird dein Platz mit der Zahlung direkt nach der Anmeldung."}
                   </p>
                 )}
               </div>
@@ -523,14 +736,6 @@ export default function RegistrationModal({
                   `${persons.length} ${persons.length === 1 ? "Person" : "Personen"} anmelden`
                 )}
               </Button>
-
-              <p className="text-xs text-muted-foreground text-center mt-2">
-                Mit der Anmeldung akzeptierst du unsere{" "}
-                <Link href="/teilnahmebedingungen" className="underline hover:text-foreground">
-                  Teilnahmebedingungen
-                </Link>
-                .
-              </p>
             </form>
           </>
         )}

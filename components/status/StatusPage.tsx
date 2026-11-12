@@ -4,11 +4,15 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import StatusBadge from "./StatusBadge";
 import ChildBadge from "@/components/ChildBadge";
+import DiscountBadge from "@/components/DiscountBadge";
+import PriceSummary from "@/components/PriceSummary";
+import { discountRequestLabel, type DiscountRequestInfo } from "@/lib/discount-requests";
 import { Calendar, Clock, MapPin, Euro, Shirt, Mail, Users, X, CheckCircle2, Loader2 } from "lucide-react";
 import type { RegistrationStatusInfo, RegistrationPerson, RegistrationStatus } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { formatEuro } from "@/lib/finance";
-import { calculateRegistrationPrice, formatEventPrice } from "@/lib/price";
+import { formatEventPrice } from "@/lib/price";
+import { calculatePersonsPrice } from "@/lib/price-tiers";
 import {
   canCancelRegistration,
   cancellationBlockedReason,
@@ -51,9 +55,13 @@ interface PersonRowProps {
   /** false = Stornofrist vorbei oder Veranstaltung schon begonnen */
   cancellationOpen: boolean;
   onCancelled: (personId: string, allCancelled: boolean) => void;
+  /** Ermäßigungsantrag dieser Person, falls gestellt. */
+  discountRequest?: DiscountRequestInfo;
 }
 
-function PersonRow({ person, index, token, registrationStatus, cancellationOpen, onCancelled }: PersonRowProps) {
+function PersonRow({
+  person, index, token, registrationStatus, cancellationOpen, onCancelled, discountRequest,
+}: PersonRowProps) {
   const [cancelling, setCancelling] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +108,7 @@ function PersonRow({ person, index, token, registrationStatus, cancellationOpen,
             <p className={`text-sm font-medium ${isCancelled ? "line-through text-gray-400" : "text-gray-900"}`}>
               {person.first_name} {person.last_name}
               {person.is_child && <ChildBadge className="ml-1.5 align-middle" />}
+              {person.discount && <DiscountBadge discount={person.discount} className="ml-1.5 align-middle" />}
               {index === 0 && <span className="ml-1.5 text-xs text-gray-400 font-normal">(du)</span>}
             </p>
             {person.checked_in_at && (
@@ -111,6 +120,11 @@ function PersonRow({ person, index, token, registrationStatus, cancellationOpen,
             {isCancelled && (
               <p className="text-xs text-gray-400 mt-0.5">
                 Storniert {formatDateTime(person.cancelled_at!)}
+              </p>
+            )}
+            {discountRequest && !isCancelled && (
+              <p className={`text-xs mt-1 ${discountRequest.has_proof ? "text-green-700" : "text-gray-500"}`}>
+                {discountRequestLabel(discountRequest)}
               </p>
             )}
           </div>
@@ -184,6 +198,12 @@ export default function StatusPage({
   const activePersons = persons.filter((p) => !p.cancelled_at);
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
+  // Plätze belegen nur bestätigte Anmeldungen. Ist das Event voll, wartet eine
+  // offene Anmeldung, bis ein Platz frei wird. Meldet der Checkout zwischendurch
+  // "ausgebucht", wird der Stand hier nachgezogen.
+  const [eventFull, setEventFull] = useState(info.event_full);
+  const discountRequests: DiscountRequestInfo[] = info.discount_requests ?? [];
+  const requestFor = (personId: string) => discountRequests.find((r) => r.person_id === personId);
 
   const eventPricing = {
     price: info.event_price,
@@ -191,20 +211,25 @@ export default function StatusPage({
     child_entry_price: info.event_child_entry_price,
     child_price: info.event_child_price,
   };
-  const pricing = calculateRegistrationPrice(eventPricing, activePersons.length, activePersons.filter((p) => p.is_child).length);
+  // Es gilt, was an der Person steht: Mit dem Nachweis aus der Anmeldung ist
+  // die Ermäßigung gesetzt, ohne ihn gilt der reguläre Preis.
+  const pricing = calculatePersonsPrice(eventPricing, activePersons);
   const totalPrice = pricing ? pricing.totalCents / 100 : null;
   const isPaid = info.paid_at != null;
   // Tatsächlicher Zahlungsstand aus der Datenbank – nicht aus dem URL-Parameter.
   const paymentState = info.payment_state ?? (isPaid ? "paid" : "open");
   const paymentReceived = paymentState === "paid";
   const paymentPending = paymentState === "processing" || paymentState === "checking";
-  const canPay =
+  // Offen und ausgebucht = Warteliste. Wer schon bestätigt ist, hat seinen Platz.
+  const waiting = status === "pending" && eventFull;
+  const payable =
     totalPrice != null &&
     totalPrice > 0 &&
     !paymentReceived &&
     !paymentPending &&
-    !info.is_waitlist &&
+    !waiting &&
     (status === "pending" || status === "approved");
+  const canPay = payable;
 
   async function handlePay() {
     setPayLoading(true);
@@ -216,6 +241,11 @@ export default function StatusPage({
         body: JSON.stringify({ status_token: token }),
       });
       const data = await res.json();
+      if (data.reason === "event_full") {
+        // Jemand anderes war schneller – zurück auf die Warteliste.
+        setEventFull(true);
+        return;
+      }
       if (!res.ok || !data.url) {
         setPayError(data.error ?? "Zahlung konnte nicht gestartet werden.");
         return;
@@ -367,26 +397,33 @@ export default function StatusPage({
           <CardContent className="space-y-4">
             {status === "pending" && (
               <div className="text-sm text-amber-700 bg-amber-50 rounded-lg p-3 space-y-2">
-                {info.is_waitlist ? (
-                  <p>
-                    Das Event war bei deiner Anmeldung bereits ausgebucht – du
-                    stehst auf der Warteliste. Wir melden uns per E-Mail, sobald
-                    ein Platz frei wird. Bezahlen musst du erst, wenn dein Platz
-                    feststeht.
-                  </p>
+                {waiting ? (
+                  totalPrice != null && totalPrice > 0 ? (
+                    <p>
+                      Das Event ist gerade ausgebucht – du stehst auf der
+                      Warteliste. Wird ein Platz frei, bekommst du eine E-Mail
+                      und kannst sofort bezahlen. Den Platz bekommt, wer zuerst
+                      bezahlt.
+                    </p>
+                  ) : (
+                    <p>
+                      Das Event ist gerade ausgebucht – du stehst auf der
+                      Warteliste. Wir melden uns per E-Mail, sobald deine
+                      Anmeldung bestätigt werden kann.
+                    </p>
+                  )
                 ) : totalPrice != null && totalPrice > 0 ? (
                   <>
                     <p>
-                      Dein Platz ist reserviert. Offen ist noch der
-                      Teilnahmebetrag von{" "}
+                      Noch sind Plätze frei. Offen ist der Teilnahmebetrag von{" "}
                       <span className="font-semibold">
                         {formatEuro(totalPrice)}
                       </span>
                       .
                     </p>
                     <p>
-                      Bezahle ihn unten, damit deine Anmeldung bestätigt werden
-                      kann.
+                      Verbindlich wird dein Platz mit der Zahlung – die freien
+                      Plätze gehen in der Reihenfolge der Zahlungen weg.
                     </p>
                   </>
                 ) : (
@@ -468,6 +505,7 @@ export default function StatusPage({
                   registrationStatus={status}
                   cancellationOpen={cancellationOpen}
                   onCancelled={handlePersonCancelled}
+                  discountRequest={requestFor(person.id)}
                 />
               ))}
 
@@ -573,15 +611,7 @@ export default function StatusPage({
                   {status === "approved" && <p>Deine Teilnahme bleibt bestätigt.</p>}
                 </div>
               )}
-              <div className="flex items-center justify-between gap-3">
-                <span className="flex items-center gap-2 text-sm text-gray-600">
-                  <Euro className="w-4 h-4 text-gray-400" />
-                  {pricing?.breakdown}
-                </span>
-                <span className="text-base font-semibold text-gray-900">
-                  {formatEuro(totalPrice!)}
-                </span>
-              </div>
+              {pricing && <PriceSummary pricing={pricing} />}
               <Button onClick={handlePay} disabled={payLoading} className="w-full">
                 {payLoading ? (
                   <>

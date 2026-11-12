@@ -16,8 +16,10 @@ import type {
   EventPerson,
   ParticipantListItem,
   CheckoutInfo,
+  EventStripeCatalog,
 } from "./types";
 import { toPublicEvent } from "./types";
+import type { EventPriceBasis } from "./db/events";
 
 const NOW = new Date().toISOString();
 const seedEvents: EventWithRegistrations[] = [
@@ -94,7 +96,7 @@ function recomputeParticipants(eventId: number) {
     .filter((r) => r.event_id === eventId && r.status === "approved")
     .reduce((sum, r) => sum + 1 + r.guests, 0);
   event.pending_participants = localRegistrations
-    .filter((r) => r.event_id === eventId && r.status === "pending" && !r.is_waitlist)
+    .filter((r) => r.event_id === eventId && r.status === "pending")
     .reduce((sum, r) => sum + 1 + r.guests, 0);
 }
 
@@ -218,16 +220,15 @@ export function getLocalEvent(id: number) {
 }
 
 export function getLocalRegistrationCount(eventId: number): number {
-  // Approved *and* pending sign-ups count towards the taken spots – see
-  // getRegistrationCount / toPublicEvent for the rationale.
+  // Nur bestätigte Anmeldungen belegen Plätze – siehe getApprovedPersonCount.
   return localRegistrations
-    .filter(
-      (r) =>
-        r.event_id === eventId &&
-        (r.status === "approved" || r.status === "pending") &&
-        !r.is_waitlist
-    )
+    .filter((r) => r.event_id === eventId && r.status === "approved")
     .reduce((sum, r) => sum + 1 + r.guests, 0);
+}
+
+function isLocalEventFull(eventId: number): boolean {
+  const event = localEvents.find((e) => e.id === eventId);
+  return !!event && getLocalRegistrationCount(eventId) >= event.max_participants;
 }
 
 export function findLocalRegistration(eventId: number, email: string) {
@@ -361,7 +362,9 @@ export function getLocalRegistrationByToken(token: string): RegistrationStatusIn
     email: reg.email ?? "",
     guests: reg.guests,
     status: reg.status,
+    event_id: event.id,
     is_waitlist: reg.is_waitlist,
+    event_full: isLocalEventFull(event.id),
     paid_at: null,
     status_note: reg.status_note,
     status_changed_at: reg.status_changed_at,
@@ -406,6 +409,7 @@ export function getLocalCheckoutInfo(token: string): CheckoutInfo | null {
     email: reg.email,
     status: reg.status,
     is_waitlist: reg.is_waitlist,
+    event_full: isLocalEventFull(event.id),
     event_id: event.id,
     event_title: event.title,
     event_date: event.date,
@@ -415,9 +419,13 @@ export function getLocalCheckoutInfo(token: string): CheckoutInfo | null {
     child_entry_price: event.child_entry_price ?? null,
     stripe_child_price_id: event.stripe_child_price_id ?? null,
     stripe_price_id: event.stripe_price_id ?? null,
+    stripe_adult_reduced_30_price_id: event.stripe_adult_reduced_30_price_id ?? null,
+    stripe_adult_reduced_50_price_id: event.stripe_adult_reduced_50_price_id ?? null,
+    stripe_child_reduced_30_price_id: event.stripe_child_reduced_30_price_id ?? null,
+    stripe_child_reduced_50_price_id: event.stripe_child_reduced_50_price_id ?? null,
     person_count: persons.length,
     child_count: persons.filter((p) => p.is_child).length,
-    persons: persons.map(({ id, is_child }) => ({ id, is_child })),
+    persons: persons.map(({ id, is_child, discount }) => ({ id, is_child, discount: discount ?? null })),
   };
 }
 
@@ -546,9 +554,37 @@ export function updateLocalEvent(id: number, data: EventCreateInput): void {
   const event = localEvents.find((e) => e.id === id);
   if (event) {
     const { images, ...eventFields } = data;
+    // Wie in Postgres: neue Preisgrundlage ⇒ alte Price IDs fallen weg.
+    const basis = { price: data.price, entry_price: data.entry_price, child_entry_price: data.child_entry_price };
+    if (!hasLocalPriceBasis(event, basis)) {
+      Object.assign(event, { ...emptyLocalPriceIds });
+    }
     Object.assign(event, eventFields);
     if (images !== undefined) setLocalEventImages(id, images);
   }
+}
+
+const emptyLocalPriceIds: Omit<EventStripeCatalog, "stripe_tier_products"> = {
+  stripe_price_id: null,
+  stripe_child_price_id: null,
+  stripe_adult_reduced_30_price_id: null,
+  stripe_adult_reduced_50_price_id: null,
+  stripe_child_reduced_30_price_id: null,
+  stripe_child_reduced_50_price_id: null,
+};
+
+function hasLocalPriceBasis(event: EventWithRegistrations, basis: EventPriceBasis): boolean {
+  return event.price === basis.price &&
+    (event.entry_price ?? null) === (basis.entry_price ?? null) &&
+    (event.child_entry_price ?? null) === (basis.child_entry_price ?? null);
+}
+
+export function saveLocalEventStripeCatalog(id: number, catalog: EventStripeCatalog, basis: EventPriceBasis): boolean {
+  const event = localEvents.find((e) => e.id === id);
+  if (!event || !hasLocalPriceBasis(event, basis)) return false;
+  // Wie in Postgres: Das frühere Einzelprodukt ist nach dem Abgleich archiviert.
+  Object.assign(event, catalog, { stripe_product_id: null });
+  return true;
 }
 
 export function deleteLocalEvent(id: number): void {

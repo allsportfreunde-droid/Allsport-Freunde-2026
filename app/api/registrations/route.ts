@@ -1,7 +1,8 @@
 import {
   getEvent,
-  getRegistrationCount,
+  isEventFull,
   findRegistration,
+  getRecognizableDiscounts,
 } from "@/lib/db";
 import { getSQL } from "@/lib/db/utils";
 import {
@@ -13,7 +14,10 @@ import { NextRequest, NextResponse } from "next/server";
 import type { RegistrationRequest } from "@/lib/types";
 import { checkRateLimit, getClientIp, RATE_LIMITS } from "@/lib/ratelimit";
 import { honeypotFailure } from "@/lib/honeypot";
-import { formatPriceLabel } from "@/lib/price";
+import { calculateTierPrices, formatPersonsPriceLabel } from "@/lib/price-tiers";
+import { matchDiscount } from "@/lib/discount-holders";
+import { parseDiscountRequest } from "@/lib/discount-requests";
+import { berlinToday } from "@/lib/review";
 import { cancellationDeadline, formatDeadline } from "@/lib/cancellation";
 
 export async function POST(request: NextRequest) {
@@ -121,18 +125,49 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Hinweis: Es gibt bewusst keine harte Kapazitätsgrenze mehr. Ist ein Event
-    // ausgebucht, landen weitere Anmeldungen als normale "pending"-Anmeldungen
-    // auf der Warteliste und können vom Team angenommen werden – auch über die
-    // Kapazität hinaus. Wir merken uns nur, ob das Event bereits voll war, um
-    // die passende Bestätigungs-E-Mail (Warteliste vs. normale Anmeldung) zu
-    // verschicken. Dieselbe Definition wie im Frontend-Button.
-    const currentCount = await getRegistrationCount(event_id);
-    const isWaitlist = currentCount >= event.max_participants;
+    // Eine Anmeldung belegt keinen Platz – das tun nur bestätigte (siehe
+    // lib/waitlist.ts). Es gibt deshalb keine harte Grenze: Ist das Event
+    // ausgebucht, wird trotzdem angemeldet, nur bezahlen geht dann erst, wenn
+    // wieder ein Platz frei ist. Gemerkt wird nur, ob das Event bei der
+    // Anmeldung voll war – das entscheidet die Eingangsmail. Gruppen dürfen
+    // überbuchen: Es reicht, dass vor der Zahlung ein Platz frei ist.
+    const isWaitlist = await isEventFull(event_id);
 
     if (persons.length > maxPerEmail) {
       return NextResponse.json(
         { error: `Maximal ${maxPerEmail} Personen pro E-Mail-Adresse erlaubt.` },
+        { status: 400 }
+      );
+    }
+
+    // Ermäßigung je Person – ausschließlich serverseitig aus der Liste, nie
+    // aus dem Formular. Scheitert der Abgleich, wird trotzdem angemeldet:
+    // dann zum vollen Preis, das Team kann erstatten.
+    let recognized: Awaited<ReturnType<typeof getRecognizableDiscounts>> = [];
+    try {
+      recognized = await getRecognizableDiscounts(normalizedEmail, berlinToday());
+    } catch (error) {
+      console.error("Ermäßigungsabgleich fehlgeschlagen – Anmeldung ohne Ermäßigung:", error);
+    }
+    const registeredPersons = persons.map((p) => ({
+      firstName: p.firstName.trim(),
+      lastName: p.lastName.trim(),
+      // isChild kommt aus dem Toggle im Formular. Alles außer einem
+      // ausdrücklichen true gilt als Erwachsener – so wie der Default "Nein".
+      is_child: p.isChild === true,
+      discount: matchDiscount(recognized, p.firstName, p.lastName),
+    }));
+
+    // Ermäßigungsanträge: nur für Personen, die nicht schon erkannt wurden.
+    // Auf Vertrauen: Die Ermäßigung gilt, sobald das Formular direkt nach der
+    // Anmeldung den Nachweis hochgeladen hat (saveDiscountProof). Ein späteres
+    // Nachreichen gibt es nicht – ohne Nachweis bleibt es beim regulären Preis.
+    const discountRequests = persons.map((p, index) =>
+      registeredPersons[index].discount ? null : parseDiscountRequest(p.discountRequest)
+    );
+    if (discountRequests.some(Boolean) && body.discountConsent !== true) {
+      return NextResponse.json(
+        { error: "Bitte willige ausdrücklich in die Speicherung des Nachweises ein, um eine Ermäßigung zu beantragen." },
         { status: 400 }
       );
     }
@@ -152,14 +187,27 @@ export async function POST(request: NextRequest) {
     `;
     registrationId = (rows[0] as { id: number }).id;
 
-    for (const p of persons) {
-      // isChild kommt aus dem Toggle im Formular. Alles außer einem
-      // ausdrücklichen true gilt als Erwachsener – so wie der Default "Nein".
-      await sql`
-        INSERT INTO registration_persons (registration_id, first_name, last_name, is_child)
-        VALUES (${registrationId}, ${p.firstName.trim()}, ${p.lastName.trim()}, ${p.isChild === true})
+    const createdRequests: Array<{ person_index: number; id: number }> = [];
+    for (const [index, p] of registeredPersons.entries()) {
+      const personRows = await sql`
+        INSERT INTO registration_persons (registration_id, first_name, last_name, is_child, discount)
+        VALUES (${registrationId}, ${p.firstName}, ${p.lastName}, ${p.is_child}, ${p.discount})
+        RETURNING id::text AS id
       `;
+      const request = discountRequests[index];
+      if (!request) continue;
+      const requestRows = await sql`
+        INSERT INTO discount_requests (person_id, registration_id, discount, remember, consented_at)
+        VALUES (${(personRows[0] as { id: string }).id}::uuid, ${registrationId}, ${request.discount}, ${request.remember}, NOW())
+        RETURNING id
+      `;
+      createdRequests.push({ person_index: index, id: (requestRows[0] as { id: number }).id });
     }
+    // Für die Mail: beantragte Ermäßigungen schon einrechnen – der Nachweis folgt direkt danach.
+    const previewPersons = registeredPersons.map((p, index) => ({
+      ...p,
+      discount: p.discount ?? discountRequests[index]?.discount ?? null,
+    }));
 
     const emailData = {
       to: normalizedEmail,
@@ -174,20 +222,18 @@ export async function POST(request: NextRequest) {
     };
 
     if (isWaitlist) {
-      // Auf der Warteliste ist nichts zu zahlen – erst wenn ein Platz
-      // angeboten wird.
-      sendWaitlistReceivedEmail(emailData);
+      // Auf der Warteliste ist nichts zu zahlen – erst wenn ein Platz frei wird.
+      sendWaitlistReceivedEmail({ ...emailData, paid: calculateTierPrices(event) != null });
     } else {
       const deadline = cancellationDeadline({
         event_date: event.date,
         event_time: event.time,
         cancellation_deadline: event.cancellation_deadline,
       });
+      const priceLabel = formatPersonsPriceLabel(event, previewPersons);
       sendRegistrationReceivedEmail({
         ...emailData,
-        priceLabel:
-          formatPriceLabel(event.entry_price, persons.length, event.price, event.child_entry_price, persons.filter((p) => p.isChild === true).length) ??
-          undefined,
+        priceLabel: priceLabel ?? undefined,
         cancellationLabel: deadline ? formatDeadline(deadline) : undefined,
       });
     }
@@ -197,6 +243,11 @@ export async function POST(request: NextRequest) {
         message: "Anmeldung erfolgreich!",
         event_title: event.title,
         status_token: statusToken,
+        // Das Formular zeigt Warteliste oder Bezahlen nach dieser Entscheidung,
+        // nicht nach dem Stand beim Laden der Seite.
+        is_waitlist: isWaitlist,
+        // Damit das Formular die Nachweise den richtigen Anträgen zuordnet.
+        discount_requests: createdRequests,
       },
       { status: 201 }
     );
