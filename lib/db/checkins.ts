@@ -270,15 +270,30 @@ async function getPersonsByRegistration(
  * Waitlist = all registrations of an event that are still pending. Ordered by
  * sign-up time so the team can confirm them first-come-first-served.
  * Registrations whose persons have all been cancelled are skipped.
+ *
+ * on_waitlist ist der aktuelle Stand (Event voll, unbezahlt, kein Angebot,
+ * keine laufende Zahlung) – dieselbe Definition wie in der Meldeliste.
  */
 export async function getEventWaitlist(eventId: number): Promise<WaitlistEntry[]> {
   const sql = getSQL();
   const rows = await sql`
+    WITH occupancy AS (
+      SELECT COUNT(rp2.id) AS taken
+      FROM registrations r2
+      JOIN registration_persons rp2 ON rp2.registration_id = r2.id AND rp2.cancelled_at IS NULL
+      WHERE r2.event_id = ${eventId} AND r2.status = 'approved'
+    )
     SELECT
-      r.id, r.email, r.phone, r.notes, r.created_at, r.is_waitlist,
+      r.id, r.email, r.phone, r.notes, r.created_at, r.is_waitlist, r.spot_offered_at,
+      (r.paid_at IS NULL AND r.spot_offered_at IS NULL
+        AND o.taken >= e.max_participants
+        AND NOT EXISTS (SELECT 1 FROM checkout_pricing cp WHERE cp.registration_id = r.id
+          AND cp.payment_state IN ('processing', 'paid', 'checking'))) AS on_waitlist,
       COALESCE((SELECT rp.first_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS first_name,
       COALESCE((SELECT rp.last_name FROM registration_persons rp WHERE rp.registration_id = r.id ORDER BY rp.created_at LIMIT 1), '') AS last_name
     FROM registrations r
+    JOIN events e ON e.id = r.event_id
+    CROSS JOIN occupancy o
     WHERE r.event_id = ${eventId}
       AND r.status = 'pending'
       AND EXISTS (

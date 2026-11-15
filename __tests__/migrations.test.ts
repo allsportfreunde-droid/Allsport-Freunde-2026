@@ -31,12 +31,12 @@ describe("Migrationen", () => {
 
     expect(done).toEqual(all.map((m) => m.name));
     expect(await columns(db, "registrations")).toEqual(expect.arrayContaining([
-      "is_waitlist", "paid_at", "review_requested_at", "qr_token", "reminder_sent_at",
+      "is_waitlist", "paid_at", "review_requested_at", "qr_token", "reminder_sent_at", "spot_offered_at",
     ]));
     // Name und Begleiter stehen seit 0010 an den Personen.
     expect(await columns(db, "registrations")).not.toContain("first_name");
     expect(await columns(db, "registration_persons")).toEqual(expect.arrayContaining([
-      "is_child", "discount", "refund_amount",
+      "is_child", "discount", "refund_amount", "refund_status", "stripe_refund_id", "refunded_at",
     ]));
     expect(await columns(db, "events")).toEqual(expect.arrayContaining([
       "stripe_tier_products", "cancellation_deadline", "max_per_email", "cash_counted",
@@ -81,6 +81,29 @@ describe("Migrationen", () => {
       "SELECT first_name FROM registration_persons ORDER BY created_at, id"
     );
     expect(persons.map((p) => p.first_name)).toEqual(["Ada", "Begleitperson", "Begleitperson"]);
+  });
+
+  it("markiert bisherige Erstattungszusagen als von Hand erstattet", async () => {
+    const { db } = await database();
+    await migrate(db, all.filter((m) => m.name < "0029"));
+    await db.exec(`
+      INSERT INTO events (title, category, description, date, time, location, price, dress_code, max_participants)
+      VALUES ('Kick', 'fussball', '', '2026-05-01', '10:00', 'Park', '10 €', '', 20);
+      INSERT INTO registrations (event_id, email) VALUES (1, 'ada@example.com');
+      INSERT INTO registration_persons (registration_id, first_name, last_name, refund_announced_at, refund_amount)
+      VALUES (1, 'Bezahlt', 'Alt', NOW(), 10), (1, 'Gratis', 'Alt', NOW(), 0), (1, 'Aktiv', 'Alt', NULL, NULL);
+    `);
+
+    await migrate(db, all);
+
+    const persons = await db.query<{ first_name: string; refund_status: string | null }>(
+      "SELECT first_name, refund_status FROM registration_persons ORDER BY first_name"
+    );
+    expect(persons).toEqual([
+      { first_name: "Aktiv", refund_status: null },
+      { first_name: "Bezahlt", refund_status: "manual" },
+      { first_name: "Gratis", refund_status: null },
+    ]);
   });
 
   it("bricht ab, wenn eine eingespielte Datei nachträglich geändert wurde", async () => {

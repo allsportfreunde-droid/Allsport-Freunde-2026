@@ -156,8 +156,10 @@ export interface Registration {
   checked_in_at: string | null;
   checked_in_by: string | null;
   is_walk_in: boolean;
-  /** Angemeldet, als das Event bereits voll war – darf (noch) nicht zahlen */
+  /** Nur Info: Bei der Anmeldung war das Event bereits ausgebucht. Steuert nichts. */
   is_waitlist: boolean;
+  /** Das Team hat einen Platz angeboten – darf trotz vollem Event zahlen (null = kein Angebot) */
+  spot_offered_at?: string | null;
   notes: string | null;
   reminder_sent_at: string | null;
   persons?: RegistrationPerson[];
@@ -208,6 +210,14 @@ export interface RegistrationWithEvent extends Registration {
   person_count: number;
   /** Davon als Kind (U18) markiert – Teilmenge von person_count */
   child_count: number;
+  /**
+   * Steht jetzt auf der Warteliste: offen, unbezahlt, keine laufende Zahlung,
+   * kein angebotener Platz und das Event ist voll. Egal, ob vor oder nach dem
+   * Ausbuchen angemeldet – anders als is_waitlist.
+   */
+  on_waitlist?: boolean;
+  /** Das Event hat einen Preis – nur dann lässt sich ein Platz anbieten. */
+  event_paid?: boolean;
 }
 
 export interface RegistrationDetail extends RegistrationWithEvent {
@@ -230,11 +240,19 @@ export interface RegistrationDetail extends RegistrationWithEvent {
   /** Fertiger Link ins Stripe-Dashboard, serverseitig gebaut */
   stripe_dashboard_url?: string | null;
   /**
-   * Was aus Stornierungen zu erstatten ist – zugesagt per E-Mail, ausgezahlt
-   * von Hand im Stripe-Dashboard. Ohne diese Anzeige wüsste niemand, welcher
-   * Betrag dort einzutragen ist.
+   * Was aus Stornierungen erstattet wurde bzw. noch zu erstatten ist – zugesagt
+   * per E-Mail, automatisch über Stripe ausgezahlt. `open_amount` muss das Team
+   * von Hand im Stripe-Dashboard erstatten (Stripe hat abgelehnt, Altfall oder
+   * abgebrochen).
    */
-  refund_due?: { amount: number; persons: number } | null;
+  refund_due?: {
+    amount: number;
+    persons: number;
+    refunded_amount: number;
+    refunded_at: string | null;
+    open_amount: number;
+    error: string | null;
+  } | null;
   /** Das Event hat einen verbindlichen Preis – nur dann lässt sich eine Ermäßigung setzen. */
   discount_available?: boolean;
   /** All persons registered under this email (incl. main person), ordered by created_at */
@@ -306,6 +324,8 @@ export interface RegistrationStatusInfo {
    * Anmeldung kann dann nicht bezahlen – sie wartet, bis ein Platz frei wird.
    */
   event_full: boolean;
+  /** Das Team hat einen Platz angeboten – Zahlen geht trotz vollem Event. */
+  spot_offered_at?: string | null;
   /** Zeitpunkt der Zahlung (null = noch nicht bezahlt) */
   paid_at: string | null;
   /** Eigener Stornozeitpunkt des Events (null = 24-Stunden-Regel) */
@@ -364,8 +384,12 @@ export interface WaitlistEntry {
   notes: string | null;
   /** When the registration came in – defines the waitlist order */
   created_at: string;
-  /** false = ein Platz wurde bereits angeboten, die Anmeldung kann zahlen */
+  /** Nur Info: Bei der Anmeldung war das Event bereits ausgebucht. */
   is_waitlist: boolean;
+  /** Steht jetzt auf der Warteliste (Event voll, kein Angebot, keine laufende Zahlung) */
+  on_waitlist: boolean;
+  /** Das Team hat einen Platz angeboten – kann trotz vollem Event zahlen */
+  spot_offered_at: string | null;
   /** All active persons for this registration with individual check-in state */
   persons: RegistrationPerson[];
 }
@@ -522,6 +546,8 @@ export interface CheckoutInfo extends Partial<Omit<EventStripeCatalog, "stripe_p
   is_waitlist: boolean;
   /** Alle Plätze sind durch bestätigte Anmeldungen belegt – offene Anmeldungen zahlen dann nicht. */
   event_full: boolean;
+  /** Vom Team angebotener Platz: Zahlen geht trotz vollem Event (gewollte Überbuchung). */
+  spot_offered_at?: string | null;
   /** Aktive, also nicht stornierte Personen dieser Anmeldung */
   person_count: number;
   child_count: number;

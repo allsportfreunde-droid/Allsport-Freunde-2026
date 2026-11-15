@@ -83,29 +83,57 @@ export async function queueCheckoutFailure(registrationId: number, sessionId: st
   `;
 }
 
-/** Erstattungsbetrag und Admin-Auftrag gemeinsam sichern, bevor ein Webhook erneut eintreffen kann. */
+/** Kennung des Admin-Auftrags zu einer nach der Stornierung eingegangenen Zahlung. */
+export function checkoutRefundNotificationId(sessionId: string): string {
+  return `checkout-refund/${sessionId}`;
+}
+
+/**
+ * Erstattungsbetrag und Admin-Auftrag gemeinsam sichern, bevor ein Webhook
+ * erneut eintreffen kann. Der Auftrag ist das Sicherheitsnetz: gelingt die
+ * automatische Erstattung danach, wird er storniert; bricht der Ablauf
+ * dazwischen ab, verschickt die nächste Zustellung die Bitte, von Hand zu
+ * erstatten.
+ *
+ * Zurück kommen die Personen, die dieser Aufruf beansprucht hat – nur für sie
+ * darf er die Stripe-Erstattung auslösen.
+ */
 export async function queueCheckoutRefund(
   registrationId: number, sessionId: string,
   shares: Array<{ personId: string; amount: number; name: string }>,
-) {
-  if (!shares.length) return;
+): Promise<Array<{ personId: string; amount: number }>> {
+  if (!shares.length) return [];
   const sql = getSQL();
-  await sql`
+  // Datenverändernde CTEs laufen immer vollständig, auch wenn das
+  // abschließende SELECT nur die beanspruchten Personen liest.
+  const rows = await sql`
     WITH shares AS (
       SELECT * FROM jsonb_to_recordset(${JSON.stringify(shares)}::jsonb)
         AS x("personId" TEXT, amount NUMERIC, name TEXT)
     ), claimed AS (
-      UPDATE registration_persons rp SET refund_announced_at = NOW(), refund_amount = shares.amount
+      UPDATE registration_persons rp SET refund_announced_at = NOW(), refund_amount = shares.amount,
+        refund_status = CASE WHEN shares.amount > 0 THEN 'processing' END
       FROM shares WHERE rp.id = shares."personId"::uuid AND rp.registration_id = ${registrationId}
         AND rp.cancelled_at IS NOT NULL AND rp.refund_announced_at IS NULL
-      RETURNING shares.amount, shares.name
+      RETURNING rp.id, shares.amount, shares.name
+    ), queued AS (
+      INSERT INTO checkout_notifications (id, registration_id, session_id, kind, data)
+      SELECT ${checkoutRefundNotificationId(sessionId)}, ${registrationId}, ${sessionId}, 'refund_due',
+        jsonb_build_object('amount', SUM(amount), 'personNames', jsonb_agg(name ORDER BY name))
+      FROM claimed HAVING SUM(amount) > 0
+      ON CONFLICT (id) DO NOTHING
     )
-    INSERT INTO checkout_notifications (id, registration_id, session_id, kind, data)
-    SELECT ${`checkout-refund/${sessionId}`}, ${registrationId}, ${sessionId}, 'refund_due',
-      jsonb_build_object('amount', SUM(amount), 'personNames', jsonb_agg(name ORDER BY name))
-    FROM claimed HAVING SUM(amount) > 0
-    ON CONFLICT (id) DO NOTHING
+    SELECT id::text AS "personId", amount::float8 AS amount FROM claimed
   `;
+  return rows as Array<{ personId: string; amount: number }>;
+}
+
+/** Den Grund einer abgelehnten automatischen Erstattung in die Admin-Mail übernehmen. */
+export async function noteCheckoutRefundFailure(sessionId: string, reason: string) {
+  const sql = getSQL();
+  await sql`UPDATE checkout_notifications
+    SET data = data || jsonb_build_object('reason', ${reason}::text)
+    WHERE id = ${checkoutRefundNotificationId(sessionId)} AND message IS NULL`;
 }
 
 export async function getCheckoutNotifications(registrationId: number): Promise<CheckoutNotification[]> {

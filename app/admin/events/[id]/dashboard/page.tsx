@@ -2120,9 +2120,13 @@ function WaitlistRow({
               {multi && (
                 <span className="text-xs text-gray-400">+{persons.length - 1}</span>
               )}
-              {entry.is_waitlist ? (
+              {entry.on_waitlist ? (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 leading-none">
                   Warteliste
+                </span>
+              ) : entry.spot_offered_at ? (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 leading-none">
+                  Platz angeboten
                 </span>
               ) : (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 leading-none">

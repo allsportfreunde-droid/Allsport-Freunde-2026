@@ -145,6 +145,20 @@ describe("Checkout mit Erwachsenen und Kindern", () => {
     expect(createSession).not.toHaveBeenCalled();
   });
 
+  it("meldet bei vollem Event die Warteliste", async () => {
+    checkoutInfo.mockResolvedValue(info({ event_full: true }));
+    const response = await POST(request());
+    expect(await response.json()).toMatchObject({ reason: "event_full" });
+  });
+
+  it("lässt eine Anmeldung mit angebotenem Platz trotz vollem Event bezahlen", async () => {
+    checkoutInfo.mockResolvedValue(info({ event_full: true, spot_offered_at: "2026-11-15T10:00:00Z" }));
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ url: "https://checkout.stripe.com/test" });
+    expect(createSession).toHaveBeenCalledTimes(1);
+  });
+
   it("rechnet ermäßigte Personen mit ihrer Price ID oder ihrem Betrag ab", async () => {
     checkoutInfo.mockResolvedValue(info({
       person_count: 3, child_count: 1,

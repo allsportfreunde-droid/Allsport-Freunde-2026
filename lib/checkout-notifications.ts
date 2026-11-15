@@ -52,11 +52,13 @@ export async function deliverCheckoutNotifications(registrationId: number) {
                 reason: notice.data.reason ?? "Stripe meldet einen fehlgeschlagenen Einzug.", adminUrl,
                 stripeUrl: stripePaymentUrl(notice.data.paymentIntentId ?? null) }));
           } else {
-            message = await createCheckoutEmail(`Erstattung fällig – ${event.title}`, adminEmail,
+            // Wird nur zugestellt, wenn die automatische Erstattung nicht bestätigt ist.
+            message = await createCheckoutEmail(
+              `${notice.data.reason ? "Automatische Erstattung fehlgeschlagen" : "Erstattung fällig"} – ${event.title}`, adminEmail,
               RefundDueAdminEmail({ eventTitle: event.title, eventDate, participantEmail: registration.email ?? "",
                 personNames: notice.data.personNames ?? [], amountLabel: formatEuro(notice.data.amount ?? 0),
                 remainingPersons: registration.person_count, stripeUrl: stripePaymentUrl(registration.stripe_payment_intent_id),
-                statusUrl, adminUrl, paymentArrivedAfterCancellation: true }));
+                statusUrl, adminUrl, paymentArrivedAfterCancellation: true, failureReason: notice.data.reason }));
           }
         }
         prepared = await prepareCheckoutMessage(notice.id, message);

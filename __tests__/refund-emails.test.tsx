@@ -50,7 +50,7 @@ describe("RegistrationCancelledEmail", () => {
 });
 
 describe("RefundDueAdminEmail", () => {
-  const admin = (stripeUrl: string | null) =>
+  const admin = (stripeUrl: string | null, extra: Partial<Parameters<typeof RefundDueAdminEmail>[0]> = {}) =>
     renderToStaticMarkup(
       RefundDueAdminEmail({
         eventTitle: "Hallenfußball",
@@ -62,8 +62,26 @@ describe("RefundDueAdminEmail", () => {
         stripeUrl,
         statusUrl: "https://example.test/status/abc",
         adminUrl: "https://example.test/admin/registrations?suche=x",
+        ...extra,
       })
     );
+
+  it("nennt den Grund, wenn Stripe die automatische Erstattung abgelehnt hat", () => {
+    const html = admin("https://dashboard.stripe.com/test/payments/pi_1", {
+      failureReason: "Refund amount exceeds the remaining charge.",
+    });
+    expect(html).toContain("Automatische Erstattung fehlgeschlagen");
+    expect(html).toContain("Grund laut Stripe:");
+    expect(html).toContain("Refund amount exceeds the remaining charge.");
+    expect(html).toContain("schon eine Erstattung");
+  });
+
+  it("bittet nach einem abgebrochenen Lauf zuerst um Prüfung in Stripe", () => {
+    const html = admin("https://dashboard.stripe.com/test/payments/pi_1", { paymentArrivedAfterCancellation: true });
+    expect(html).toContain("Erstattung fällig");
+    expect(html).toContain("nicht bestätigt");
+    expect(html).not.toContain("Grund laut Stripe");
+  });
 
   it("führt Betrag und alle drei Links auf", () => {
     const html = admin("https://dashboard.stripe.com/test/payments/pi_1");

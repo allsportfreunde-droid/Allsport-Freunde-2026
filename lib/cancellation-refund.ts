@@ -1,9 +1,13 @@
-import { announceRefunds, getRefundContext, queueCheckoutRefund } from "@/lib/db";
-import { amountFromCents } from "@/lib/price";
+import {
+  announceRefunds, getRefundContext, queueCheckoutRefund, recordRefundResult,
+  cancelCheckoutNotification, noteCheckoutRefundFailure, checkoutRefundNotificationId,
+} from "@/lib/db";
+import { amountFromCents, centsFromAmount } from "@/lib/price";
 import { refundSharesCents } from "@/lib/refund";
 import { isCancellationOpen } from "@/lib/cancellation";
 import { sendRefundDueAdminEmail, sendRegistrationCancelledEmail } from "@/lib/email";
 import { stripePaymentUrl } from "@/lib/stripe";
+import { issueStripeRefund } from "@/lib/stripe-refund";
 import type { RefundContext } from "@/lib/types";
 
 /**
@@ -22,9 +26,9 @@ const ADMIN_EMAIL =
  * Stornobestätigung. Dadurch kann keine Stornierung entstehen, in deren
  * E-Mail die Erstattung fehlt – und keine zweite E-Mail ohne sie daneben.
  *
- * Zurücküberwiesen wird von Hand im Stripe-Dashboard. Hier entsteht nur die
- * Zahl: was dem Teilnehmer zusteht, schriftlich zugesagt und an der Person
- * festgehalten, damit der Admin sie in der Anmeldung nachlesen kann.
+ * Hier entsteht die Zahl – was dem Teilnehmer zusteht, schriftlich zugesagt
+ * und an der Person festgehalten – und Stripe zahlt sie sofort zurück. Nur
+ * wenn Stripe ablehnt, bekommt das Team eine Mail und erstattet von Hand.
  *
  * Was zu erstatten ist, ergibt sich aus dem, was in der Datenbank steht: alle
  * bezahlten Personen, die storniert sind und für die noch nichts zugesagt
@@ -53,7 +57,11 @@ export interface RefundOutcome {
   partial: boolean;
 }
 
-/** Eine fristgerechte Stornierung bleibt erstattungsfähig, auch wenn SEPA erst Tage später erfolgreich wird. */
+/**
+ * Eine fristgerechte Stornierung bleibt erstattungsfähig, auch wenn SEPA erst
+ * Tage später erfolgreich wird. Der Admin-Auftrag entsteht zusammen mit der
+ * Zusage und wird erst storniert, wenn Stripe die Erstattung angenommen hat.
+ */
 export async function reconcileCheckoutRefund(registrationId: number, sessionId: string): Promise<void> {
   const context = await getRefundContext(registrationId);
   if (!context?.paid_at || context.stripe_session_id !== sessionId) return;
@@ -67,9 +75,22 @@ export async function reconcileCheckoutRefund(registrationId: number, sessionId:
   const shares = refundSharesCents({ amountPaid: context.amount_paid, paidPersons: context.paid_persons,
     announcedCents: context.announced_cents }, persons.map(p => p.id),
     context.active_paid_persons + context.pending_persons.length - persons.length, context.paid_person_prices);
-  await queueCheckoutRefund(registrationId, sessionId, persons.map((person, i) => ({
+  const claimed = await queueCheckoutRefund(registrationId, sessionId, persons.map((person, i) => ({
     personId: person.id, amount: amountFromCents(shares[i]), name: `${person.first_name} ${person.last_name}`.trim(),
   })));
+
+  const paidFor = claimed.filter((share) => share.amount > 0);
+  if (!paidFor.length) return;
+  const personIds = paidFor.map((share) => share.personId);
+  const result = await issueStripeRefund({
+    registrationId,
+    paymentIntentId: context.stripe_payment_intent_id,
+    personIds,
+    cents: paidFor.reduce((sum, share) => sum + centsFromAmount(share.amount), 0),
+  });
+  await recordRefundResult(personIds, result);
+  if (result.ok) await cancelCheckoutNotification(checkoutRefundNotificationId(sessionId));
+  else await noteCheckoutRefundFailure(sessionId, result.reason);
 }
 
 /**
@@ -90,7 +111,29 @@ export async function refundAndNotifyCancellation(
     return { amount: 0, persons: [], partial: false };
   }
 
-  const outcome = await announceOpenShares(context);
+  const { claimed, ...outcome } = await announceOpenShares(context);
+
+  // Erst zurückzahlen, dann bestätigen: die Mail sagt den Betrag ohnehin zu,
+  // aber das Ergebnis entscheidet, ob das Team eingreifen muss.
+  const paidFor = claimed.filter(({ cents }) => cents > 0);
+  const refund = paidFor.length
+    ? await issueStripeRefund({
+        registrationId: context.registration_id,
+        paymentIntentId: context.stripe_payment_intent_id,
+        personIds: paidFor.map(({ id }) => id),
+        cents: paidFor.reduce((sum, { cents }) => sum + cents, 0),
+      })
+    : null;
+  if (refund) {
+    try {
+      await recordRefundResult(paidFor.map(({ id }) => id), refund);
+    } catch (error) {
+      // Die Stornierung ist gespeichert und das Geld (vielleicht) unterwegs –
+      // die Bestätigung darf daran nicht scheitern. Ohne Ergebnis erscheint
+      // der Betrag nach 15 Minuten in der Anmeldung als "Zu erstatten".
+      console.error(`Erstattungsergebnis für Anmeldung ${context.registration_id} nicht gespeichert:`, error);
+    }
+  }
 
   const to = context.email ?? fallback?.to ?? "";
   if (to) {
@@ -109,10 +152,10 @@ export async function refundAndNotifyCancellation(
     });
   }
 
-  // Die Zusage steht beim Teilnehmer, gezahlt wird sie von Hand. Also muss
-  // sie auch bei uns ankommen – sonst wartet jemand auf Geld, von dem hier
-  // niemand weiß.
-  if (outcome.amount > 0 && ADMIN_EMAIL) {
+  // Hat Stripe abgelehnt, steht die Zusage beim Teilnehmer, aber das Geld ist
+  // nicht unterwegs. Dann muss sie bei uns ankommen – sonst wartet jemand auf
+  // Geld, von dem hier niemand weiß.
+  if (refund && !refund.ok && ADMIN_EMAIL) {
     sendRefundDueAdminEmail({
       adminEmail: ADMIN_EMAIL,
       eventTitle: context.event_title,
@@ -123,10 +166,11 @@ export async function refundAndNotifyCancellation(
       remainingPersons: context.active_persons,
       stripeUrl: stripePaymentUrl(context.stripe_payment_intent_id),
       statusToken: context.status_token,
+      failureReason: refund.reason,
     });
-  } else if (outcome.amount > 0) {
+  } else if (refund && !refund.ok) {
     console.warn(
-      `Erstattung über ${outcome.amount} € fällig, aber ADMIN_EMAIL ist nicht gesetzt (Anmeldung ${context.registration_id}).`
+      `Erstattung über ${outcome.amount} € fehlgeschlagen (${refund.reason}), aber ADMIN_EMAIL ist nicht gesetzt (Anmeldung ${context.registration_id}).`
     );
   }
 
@@ -134,9 +178,11 @@ export async function refundAndNotifyCancellation(
 }
 
 /** Rechnet die Anteile der stornierten Personen aus und sagt sie zu. */
-async function announceOpenShares(context: RefundContext): Promise<RefundOutcome> {
+async function announceOpenShares(
+  context: RefundContext
+): Promise<RefundOutcome & { claimed: Array<{ id: string; cents: number }> }> {
   const partial = context.active_persons > 0;
-  const nothing: RefundOutcome = { amount: 0, persons: [], partial };
+  const nothing = { amount: 0, persons: [], partial, claimed: [] };
 
   if (!context.paid_at || context.pending_persons.length === 0) return nothing;
 
@@ -180,5 +226,6 @@ async function announceOpenShares(context: RefundContext): Promise<RefundOutcome
     amount: amountFromCents(claimed.reduce((sum, { cents: c }) => sum + c, 0)),
     persons: claimed.map(({ person }) => `${person.first_name} ${person.last_name}`.trim()),
     partial,
+    claimed: claimed.map(({ person, cents }) => ({ id: person.id, cents })),
   };
 }
