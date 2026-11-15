@@ -18,7 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/components/ui/toast";
 import StatusBadge from "@/components/status/StatusBadge";
 import ChildBadge from "@/components/ChildBadge";
-import { Trash2, Loader2, Search, Download, CheckCircle2, XCircle, Clock, X } from "lucide-react";
+import { Trash2, Loader2, Search, Download, CheckCircle2, XCircle, Clock, X, Ticket, Undo2 } from "lucide-react";
 import RegistrationDetailButton from "@/components/RegistrationDetailButton";
 import type { RegistrationWithEvent, RegistrationStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -40,6 +40,36 @@ const PAGE_SIZE = 25;
 type BulkOp =
   | { kind: "status"; status: RegistrationStatus }
   | { kind: "delete" };
+
+/**
+ * Einen Platz anbieten lässt sich nur, wem er gerade fehlt: Warteliste (Event
+ * voll, unbezahlt), kostenpflichtiges Event und eine E-Mail für das Angebot.
+ * Bei kostenlosen Events bestätigt das Team direkt.
+ */
+const canOfferSpot = (r: RegistrationWithEvent) =>
+  !!r.on_waitlist && !!r.event_paid && !!r.email?.trim();
+
+/** Offenes Angebot – zurückziehen geht, solange keine Zahlung läuft (prüft der Server). */
+const hasSpotOffer = (r: RegistrationWithEvent) => r.status === "pending" && !!r.spot_offered_at;
+
+/** Warteliste nach aktuellem Stand bzw. angebotener Platz – neben dem Status-Badge. */
+function WaitlistBadge({ r }: { r: RegistrationWithEvent }) {
+  if (hasSpotOffer(r)) {
+    return (
+      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 leading-none">
+        Platz angeboten
+      </span>
+    );
+  }
+  if (r.on_waitlist) {
+    return (
+      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 leading-none">
+        Warteliste
+      </span>
+    );
+  }
+  return null;
+}
 
 export default function RegistrationTable({
   eventId,
@@ -64,6 +94,8 @@ export default function RegistrationTable({
   const [statusTarget, setStatusTarget] = useState<{ reg: RegistrationWithEvent; status: RegistrationStatus } | null>(null);
   const [statusNote, setStatusNote] = useState("");
   const [statusProcessing, setStatusProcessing] = useState(false);
+  const [offerTarget, setOfferTarget] = useState<{ reg: RegistrationWithEvent; action: "offer" | "withdraw" } | null>(null);
+  const [offerProcessing, setOfferProcessing] = useState(false);
 
   const fetchRegistrations = () => {
     setLoading(true);
@@ -159,6 +191,36 @@ export default function RegistrationTable({
       toast("Verbindungsfehler.", "error");
     } finally {
       setStatusProcessing(false);
+    }
+  };
+
+  const handleSpotOffer = async () => {
+    if (!offerTarget) return;
+    const { reg, action } = offerTarget;
+    setOfferProcessing(true);
+    try {
+      const res = await fetch(`/api/admin/registrations/${reg.id}/spot-offer`, {
+        method: action === "offer" ? "POST" : "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(data.error || "Aktion fehlgeschlagen.", "error");
+        return;
+      }
+      toast(
+        action === "withdraw"
+          ? "Angebot zurückgezogen."
+          : data.offered
+          ? "Platz angeboten – die E-Mail ist unterwegs."
+          : "Der Platz war bereits angeboten.",
+        "success"
+      );
+      setOfferTarget(null);
+      fetchRegistrations();
+    } catch {
+      toast("Verbindungsfehler.", "error");
+    } finally {
+      setOfferProcessing(false);
     }
   };
 
@@ -477,11 +539,7 @@ export default function RegistrationTable({
                       <div className="flex items-center gap-1.5">
                         <StatusBadge status={r.status || "pending"} />
                         {r.payment_failed && <span className="text-xs font-medium text-red-700">SEPA-Einzug fehlgeschlagen</span>}
-                        {r.status === "pending" && r.is_waitlist && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 leading-none">
-                            Warteliste
-                          </span>
-                        )}
+                        <WaitlistBadge r={r} />
                       </div>
                     </TableCell>
                     {!eventId && <TableCell className="hidden xl:table-cell max-w-[200px] truncate">{r.event_title}</TableCell>}
@@ -489,6 +547,26 @@ export default function RegistrationTable({
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         <RegistrationDetailButton registrationId={r.id} />
+                        {canOfferSpot(r) && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="Platz anbieten – kann trotz ausgebuchtem Event bezahlen"
+                            onClick={() => setOfferTarget({ reg: r, action: "offer" })}
+                          >
+                            <Ticket className="w-4 h-4 text-blue-600" />
+                          </Button>
+                        )}
+                        {hasSpotOffer(r) && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="Angebot zurückziehen"
+                            onClick={() => setOfferTarget({ reg: r, action: "withdraw" })}
+                          >
+                            <Undo2 className="w-4 h-4 text-gray-500" />
+                          </Button>
+                        )}
                         {r.status !== "approved" && r.status !== "cancelled" && (
                           <Button
                             variant="ghost"
@@ -593,11 +671,7 @@ export default function RegistrationTable({
                   <div className="flex items-center gap-1.5 shrink-0">
                     <StatusBadge status={r.status || "pending"} />
                     {r.payment_failed && <span className="text-xs font-medium text-red-700">SEPA-Einzug fehlgeschlagen</span>}
-                    {r.status === "pending" && r.is_waitlist && (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 leading-none">
-                        Warteliste
-                      </span>
-                    )}
+                    <WaitlistBadge r={r} />
                   </div>
                 </div>
 
@@ -608,6 +682,28 @@ export default function RegistrationTable({
                     size="sm"
                     className="w-full justify-start"
                   />
+                  {canOfferSpot(r) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-blue-700 border-blue-200 w-full"
+                      onClick={() => setOfferTarget({ reg: r, action: "offer" })}
+                    >
+                      <Ticket className="w-3.5 h-3.5 mr-1.5" />
+                      Platz anbieten
+                    </Button>
+                  )}
+                  {hasSpotOffer(r) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-gray-700 border-gray-200 w-full"
+                      onClick={() => setOfferTarget({ reg: r, action: "withdraw" })}
+                    >
+                      <Undo2 className="w-3.5 h-3.5 mr-1.5" />
+                      Angebot zurückziehen
+                    </Button>
+                  )}
                   {r.status !== "approved" && r.status !== "cancelled" && (
                     <Button
                       size="sm"
@@ -727,6 +823,37 @@ export default function RegistrationTable({
                 : statusTarget?.status === "rejected"
                 ? "Ablehnen"
                 : "Ändern"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Platz anbieten / Angebot zurückziehen */}
+      <Dialog open={!!offerTarget} onOpenChange={(o) => { if (!o) setOfferTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {offerTarget?.action === "withdraw" ? "Angebot zurückziehen" : "Platz anbieten"}
+            </DialogTitle>
+            <DialogDescription>
+              {offerTarget?.reg.first_name} {offerTarget?.reg.last_name} –{" "}
+              {offerTarget?.reg.event_title}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm text-gray-600">
+            {offerTarget?.action === "withdraw"
+              ? "Ein offener Zahlungslink wird geschlossen, die Anmeldung steht wieder auf der Warteliste. Es geht keine E-Mail raus."
+              : `Die Anmeldung bekommt eine E-Mail und kann trotz ausgebuchtem Event bezahlen. Mit der Zahlung ist sie bestätigt – das Event ist dann um ${
+                  offerTarget?.reg.person_count === 1 ? "1 Person" : `${offerTarget?.reg.person_count ?? 0} Personen`
+                } überbucht.`}
+          </p>
+          <div className="flex justify-end gap-3 mt-4">
+            <Button variant="outline" onClick={() => setOfferTarget(null)}>
+              Abbrechen
+            </Button>
+            <Button onClick={handleSpotOffer} disabled={offerProcessing}>
+              {offerProcessing && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+              {offerTarget?.action === "withdraw" ? "Zurückziehen" : "Platz anbieten"}
             </Button>
           </div>
         </DialogContent>

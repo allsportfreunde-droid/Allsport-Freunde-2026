@@ -2,6 +2,7 @@ import { getSQL, isPostgresConfigured } from "./utils";
 import { withRegistrationLock, type RegistrationSQL } from "./registration-lock";
 import { CancellationBlockedError, cancellationBlockedReason, cancellationSourceFromRegistration } from "../cancellation";
 import type { PersonPrices } from "../payment-prices";
+import { calculateTierPrices } from "../price-tiers";
 import type {
   RegistrationWithEvent,
   RegistrationDetail,
@@ -145,7 +146,7 @@ export async function getRegistrationByToken(token: string, transaction?: Regist
   const rows = await sql`
     SELECT
       r.id, r.email, r.event_id,
-      r.status, r.status_note, r.status_changed_at, r.created_at, r.is_waitlist, r.paid_at, r.amount_paid::float8 AS amount_paid,
+      r.status, r.status_note, r.status_changed_at, r.created_at, r.is_waitlist, r.spot_offered_at, r.paid_at, r.amount_paid::float8 AS amount_paid,
       (SELECT COUNT(rp2.id) FROM registrations r2
         JOIN registration_persons rp2 ON rp2.registration_id = r2.id AND rp2.cancelled_at IS NULL
         WHERE r2.event_id = e.id AND r2.status = 'approved') >= e.max_participants AS event_full,
@@ -256,6 +257,36 @@ const personNameCols = `
 `;
 void personNameCols; // Used as documentation; actual SQL is inlined below
 
+type ListRow = RegistrationWithEvent & {
+  event_price: string | null;
+  event_entry_price: number | null;
+  event_child_entry_price: number | null;
+  event_child_price: string | null;
+};
+
+/**
+ * Ob ein Event einen Preis hat, entscheidet dieselbe Rechnung wie beim
+ * Checkout (calculateTierPrices) – in SQL ließe sie sich nur ungenau
+ * nachbauen. Die Preisfelder selbst gehen nicht an die Meldeliste.
+ */
+function withListFlags(rows: ListRow[]): RegistrationWithEvent[] {
+  return rows.map(({ event_price, event_entry_price, event_child_entry_price, event_child_price, ...row }) => ({
+    ...row,
+    event_paid: calculateTierPrices({
+      price: event_price,
+      entry_price: event_entry_price,
+      child_entry_price: event_child_entry_price,
+      child_price: event_child_price,
+    }) != null,
+  }));
+}
+
+/*
+ * Meldeliste: Belegung je Event einmal zählen statt pro Zeile. on_waitlist ist
+ * der aktuelle Stand – offen, unbezahlt, ohne laufende Zahlung und ohne
+ * angebotenen Platz bei vollem Event –, egal ob vor oder nach dem Ausbuchen
+ * angemeldet. Dieselbe Sperre wie im Checkout (app/api/checkout/route.ts).
+ */
 export async function getAllRegistrations(): Promise<RegistrationWithEvent[]> {
   if (!isPostgresConfigured()) {
     const { getLocalAllRegistrations } = await import("../local-data");
@@ -264,10 +295,23 @@ export async function getAllRegistrations(): Promise<RegistrationWithEvent[]> {
 
   const sql = getSQL();
   const rows = await sql`
+    WITH occupancy AS (
+      SELECT r2.event_id, COUNT(rp2.id) AS taken
+      FROM registrations r2
+      JOIN registration_persons rp2 ON rp2.registration_id = r2.id AND rp2.cancelled_at IS NULL
+      WHERE r2.status = 'approved'
+      GROUP BY r2.event_id
+    )
     SELECT
       (r.paid_at IS NULL AND EXISTS (SELECT 1 FROM checkout_pricing cp
         WHERE cp.registration_id = r.id AND cp.payment_state = 'failed')) AS payment_failed,
-      r.id, r.event_id, r.email, r.phone, r.status, r.status_token, r.is_waitlist,
+      r.id, r.event_id, r.email, r.phone, r.status, r.status_token, r.is_waitlist, r.spot_offered_at,
+      (r.status = 'pending' AND r.paid_at IS NULL AND r.spot_offered_at IS NULL
+        AND COALESCE(o.taken, 0) >= e.max_participants
+        AND NOT EXISTS (SELECT 1 FROM checkout_pricing cp WHERE cp.registration_id = r.id
+          AND cp.payment_state IN ('processing', 'paid', 'checking'))) AS on_waitlist,
+      e.price AS event_price, e.entry_price::float8 AS event_entry_price,
+      e.child_entry_price::float8 AS event_child_entry_price, e.child_price AS event_child_price,
       r.status_changed_at, r.status_note, r.created_at,
       r.qr_code, r.qr_token, r.checked_in_at, r.checked_in_by,
       r.is_walk_in, r.notes, r.reminder_sent_at,
@@ -280,9 +324,10 @@ export async function getAllRegistrations(): Promise<RegistrationWithEvent[]> {
       e.category AS event_category
     FROM registrations r
     JOIN events e ON r.event_id = e.id
+    LEFT JOIN occupancy o ON o.event_id = e.id
     ORDER BY r.created_at DESC
   `;
-  return rows as RegistrationWithEvent[];
+  return withListFlags(rows as ListRow[]);
 }
 
 export async function getEventRegistrations(eventId: number): Promise<RegistrationWithEvent[]> {
@@ -293,10 +338,22 @@ export async function getEventRegistrations(eventId: number): Promise<Registrati
 
   const sql = getSQL();
   const rows = await sql`
+    WITH occupancy AS (
+      SELECT COUNT(rp2.id) AS taken
+      FROM registrations r2
+      JOIN registration_persons rp2 ON rp2.registration_id = r2.id AND rp2.cancelled_at IS NULL
+      WHERE r2.event_id = ${eventId} AND r2.status = 'approved'
+    )
     SELECT
       (r.paid_at IS NULL AND EXISTS (SELECT 1 FROM checkout_pricing cp
         WHERE cp.registration_id = r.id AND cp.payment_state = 'failed')) AS payment_failed,
-      r.id, r.event_id, r.email, r.phone, r.status, r.status_token, r.is_waitlist,
+      r.id, r.event_id, r.email, r.phone, r.status, r.status_token, r.is_waitlist, r.spot_offered_at,
+      (r.status = 'pending' AND r.paid_at IS NULL AND r.spot_offered_at IS NULL
+        AND o.taken >= e.max_participants
+        AND NOT EXISTS (SELECT 1 FROM checkout_pricing cp WHERE cp.registration_id = r.id
+          AND cp.payment_state IN ('processing', 'paid', 'checking'))) AS on_waitlist,
+      e.price AS event_price, e.entry_price::float8 AS event_entry_price,
+      e.child_entry_price::float8 AS event_child_entry_price, e.child_price AS event_child_price,
       r.status_changed_at, r.status_note, r.created_at,
       r.qr_code, r.qr_token, r.checked_in_at, r.checked_in_by,
       r.is_walk_in, r.notes, r.reminder_sent_at,
@@ -309,10 +366,11 @@ export async function getEventRegistrations(eventId: number): Promise<Registrati
       e.category AS event_category
     FROM registrations r
     JOIN events e ON r.event_id = e.id
+    CROSS JOIN occupancy o
     WHERE r.event_id = ${eventId}
     ORDER BY r.created_at DESC
   `;
-  return rows as RegistrationWithEvent[];
+  return withListFlags(rows as ListRow[]);
 }
 
 export async function getEventPersons(eventId: number): Promise<EventPerson[]> {
@@ -808,7 +866,7 @@ export async function getCheckoutInfo(token: string): Promise<CheckoutInfo | nul
   const sql = getSQL();
   const rows = await sql`
     SELECT
-      r.id AS registration_id, r.email, r.status, r.is_waitlist, r.paid_at,
+      r.id AS registration_id, r.email, r.status, r.is_waitlist, r.spot_offered_at, r.paid_at,
       (SELECT COUNT(rp2.id) FROM registrations r2
         JOIN registration_persons rp2 ON rp2.registration_id = r2.id AND rp2.cancelled_at IS NULL
         WHERE r2.event_id = e.id AND r2.status = 'approved') >= e.max_participants AS event_full,
@@ -887,7 +945,7 @@ export async function markRegistrationPaid(
  * Alles, was für die Erstattung nach einer Stornierung gebraucht wird, in
  * einem Zug aus der Datenbank.
  *
- * Zurückgezahlt wird von Hand im Stripe-Dashboard. Diese Abfrage liefert die
+ * Zurückgezahlt wird automatisch über Stripe. Diese Abfrage liefert die
  * Grundlage dafür und für die Zusage in der Storno-E-Mail: für wie viele
  * Personen damals bezahlt wurde, wer davon storniert ist und was bereits
  * zugesagt wurde.
@@ -982,6 +1040,9 @@ export async function getRefundContext(
  * Stornierungen können deshalb nicht denselben Anteil zweimal zusagen – das
  * entscheidet die Datenbank, nicht die Reihenfolge der Aufrufe. Zurück kommen
  * nur die Personen, die dieser Aufruf wirklich für sich verbucht hat.
+ *
+ * Ein Betrag über 0 steht danach auf `processing`: dieselbe Beanspruchung
+ * berechtigt den Aufrufer, die Stripe-Erstattung auszulösen – und nur ihn.
  */
 export async function announceRefunds(
   shares: Array<{ personId: string; amount: number }>
@@ -993,7 +1054,8 @@ export async function announceRefunds(
   for (const { personId, amount } of shares) {
     const rows = await sql`
       UPDATE registration_persons
-      SET refund_announced_at = NOW(), refund_amount = ${amount}
+      SET refund_announced_at = NOW(), refund_amount = ${amount},
+          refund_status = CASE WHEN ${amount}::numeric > 0 THEN 'processing' END
       WHERE id = ${personId}::uuid AND refund_announced_at IS NULL
       RETURNING id
     `;
@@ -1002,22 +1064,74 @@ export async function announceRefunds(
   return claimed;
 }
 
+/** Ergebnis einer Stripe-Erstattung an den beanspruchten Personen festhalten. */
+export async function recordRefundResult(
+  personIds: string[],
+  result: { ok: true; refundId: string } | { ok: false; reason: string }
+): Promise<void> {
+  if (!isPostgresConfigured() || personIds.length === 0) return;
+
+  const sql = getSQL();
+  if (result.ok) {
+    await sql`
+      UPDATE registration_persons
+      SET refund_status = 'refunded', stripe_refund_id = ${result.refundId},
+          refunded_at = NOW(), refund_error = NULL
+      WHERE id = ANY(${personIds}::uuid[]) AND refund_status = 'processing'
+    `;
+  } else {
+    await sql`
+      UPDATE registration_persons
+      SET refund_status = 'failed', refund_error = ${result.reason}
+      WHERE id = ANY(${personIds}::uuid[]) AND refund_status = 'processing'
+    `;
+  }
+}
+
+export interface RefundDue {
+  /** Insgesamt zugesagt, in Euro */
+  amount: number;
+  /** Personen mit Zusage */
+  persons: number;
+  /** Über Stripe automatisch erstattet, in Euro */
+  refunded_amount: number;
+  /** Zeitpunkt der letzten automatischen Erstattung */
+  refunded_at: string | null;
+  /**
+   * Vom Team von Hand zu erstatten, in Euro: von Stripe abgelehnt, als Altfall
+   * von Hand zugesagt oder seit über 15 Minuten ohne Ergebnis (abgebrochen –
+   * dann zuerst in Stripe prüfen, ob die Erstattung doch angekommen ist).
+   */
+  open_amount: number;
+  /** Letzter Grund, warum Stripe abgelehnt hat */
+  error: string | null;
+}
+
 /**
- * Was für eine Anmeldung insgesamt zu erstatten ist – die Zahl, die der Admin
- * im Stripe-Dashboard zurückgibt.
+ * Was für eine Anmeldung zugesagt ist und was davon noch von Hand im
+ * Stripe-Dashboard zurückgegeben werden muss.
  */
-export async function getRefundDue(
-  registrationId: number
-): Promise<{ amount: number; persons: number }> {
-  if (!isPostgresConfigured()) return { amount: 0, persons: 0 };
+export async function getRefundDue(registrationId: number): Promise<RefundDue> {
+  if (!isPostgresConfigured()) {
+    return { amount: 0, persons: 0, refunded_amount: 0, refunded_at: null, open_amount: 0, error: null };
+  }
 
   const sql = getSQL();
   const rows = await sql`
     SELECT
       COALESCE(SUM(refund_amount), 0)::float8 AS amount,
-      COUNT(*) FILTER (WHERE refund_announced_at IS NOT NULL)::int AS persons
+      COUNT(*) FILTER (WHERE refund_announced_at IS NOT NULL)::int AS persons,
+      COALESCE(SUM(refund_amount) FILTER (WHERE refund_status = 'refunded'), 0)::float8 AS refunded_amount,
+      MAX(refunded_at) AS refunded_at,
+      COALESCE(SUM(refund_amount) FILTER (
+        WHERE refund_status IN ('failed', 'manual')
+          OR (refund_status = 'processing'
+              AND refund_announced_at < NOW() - INTERVAL '15 minutes')
+      ), 0)::float8 AS open_amount,
+      (ARRAY_AGG(refund_error ORDER BY refund_announced_at DESC)
+        FILTER (WHERE refund_status = 'failed'))[1] AS error
     FROM registration_persons
     WHERE registration_id = ${registrationId}
   `;
-  return rows[0] as { amount: number; persons: number };
+  return rows[0] as RefundDue;
 }

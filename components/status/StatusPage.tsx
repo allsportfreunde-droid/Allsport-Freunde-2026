@@ -221,7 +221,9 @@ export default function StatusPage({
   const paymentReceived = paymentState === "paid";
   const paymentPending = paymentState === "processing" || paymentState === "checking";
   // Offen und ausgebucht = Warteliste. Wer schon bestätigt ist, hat seinen Platz.
-  const waiting = status === "pending" && eventFull;
+  // Hat das Team einen Platz angeboten, darf trotz vollem Event bezahlt werden.
+  const spotOffered = status === "pending" && eventFull && !!info.spot_offered_at;
+  const waiting = status === "pending" && eventFull && !spotOffered;
   const payable =
     totalPrice != null &&
     totalPrice > 0 &&
@@ -412,6 +414,13 @@ export default function StatusPage({
                       Anmeldung bestätigt werden kann.
                     </p>
                   )
+                ) : spotOffered && totalPrice != null && totalPrice > 0 ? (
+                  <p>
+                    Für dich ist ein Platz frei. Sichere ihn dir, indem du jetzt
+                    den Teilnahmebetrag von{" "}
+                    <span className="font-semibold">{formatEuro(totalPrice)}</span>{" "}
+                    bezahlst.
+                  </p>
                 ) : totalPrice != null && totalPrice > 0 ? (
                   <>
                     <p>

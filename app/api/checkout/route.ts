@@ -18,9 +18,11 @@ const EVENT_FULL_MESSAGE =
  * Plätze belegen nur bestätigte Anmeldungen (lib/waitlist.ts). Eine offene
  * Anmeldung darf deshalb nur zahlen, solange noch ein Platz frei ist. Wer
  * schon bestätigt ist (Team, Walk-in) und nur noch zahlt, hat seinen Platz.
+ * Hat das Team einen Platz angeboten, darf die Anmeldung trotz vollem Event
+ * zahlen – gewollte Überbuchung.
  */
-const blockedByCapacity = (info: { status: string; event_full: boolean }) =>
-  info.status === "pending" && info.event_full;
+const blockedByCapacity = (info: { status: string; event_full: boolean; spot_offered_at?: string | null }) =>
+  info.status === "pending" && info.event_full && !info.spot_offered_at;
 
 /**
  * Startet eine Stripe-Zahlung für eine bestehende Anmeldung.

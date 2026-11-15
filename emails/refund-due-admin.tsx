@@ -28,6 +28,8 @@ interface Props {
   statusUrl: string;
   /** Link zur Anmeldungsliste im Admin-Panel */
   adminUrl: string;
+  /** Warum Stripe die automatische Erstattung abgelehnt hat */
+  failureReason?: string;
 }
 
 export function RefundDueAdminEmail({
@@ -41,18 +43,34 @@ export function RefundDueAdminEmail({
   statusUrl,
   adminUrl,
   paymentArrivedAfterCancellation = false,
+  failureReason,
 }: Props) {
+  // Normalerweise erstattet Stripe automatisch. Diese Mail heißt immer: das
+  // Geld ist (vielleicht) nicht unterwegs, jemand muss in Stripe nachsehen.
+  const intro = failureReason
+    ? `${paymentArrivedAfterCancellation
+        ? "Die Zahlung ist nach einer fristgerechten Stornierung eingegangen."
+        : "Eine bezahlte Anmeldung wurde innerhalb der Frist storniert."} Stripe hat die automatische Erstattung abgelehnt – bitte von Hand im Stripe-Dashboard erstatten. Der Teilnehmer hat den Betrag bereits schriftlich zugesagt bekommen.`
+    : paymentArrivedAfterCancellation
+      ? "Die Zahlung ist nach einer fristgerechten Stornierung eingegangen. Die automatische Erstattung wurde nicht bestätigt – bitte im Stripe-Dashboard prüfen, ob sie dort schon steht, und sonst von Hand erstatten."
+      : "Eine bezahlte Anmeldung wurde innerhalb der Frist storniert. Der Teilnehmer hat die Erstattung bereits schriftlich zugesagt bekommen – bitte von Hand im Stripe-Dashboard erstatten.";
+
   return (
     <Html lang="de">
       <Head />
       <Body style={main}>
         <Container style={container}>
-          <Text style={heading}>Erstattung fällig: {amountLabel}</Text>
-          <Text style={text}>
-            {paymentArrivedAfterCancellation
-              ? "Die Zahlung ist nach einer fristgerechten Stornierung eingegangen. Bitte die fällige Erstattung von Hand im Stripe-Dashboard bearbeiten."
-              : "Eine bezahlte Anmeldung wurde innerhalb der Frist storniert. Der Teilnehmer hat die Erstattung bereits schriftlich zugesagt bekommen – überwiesen wird sie von Hand im Stripe-Dashboard."}
+          <Text style={heading}>
+            {failureReason ? "Automatische Erstattung fehlgeschlagen" : "Erstattung fällig"}: {amountLabel}
           </Text>
+          <Text style={text}>{intro}</Text>
+          {failureReason && (
+            <Section style={reasonBox}>
+              <Text style={reasonText}>
+                <strong>Grund laut Stripe:</strong> {failureReason}
+              </Text>
+            </Section>
+          )}
           <Section style={amountBox}>
             <Text style={amountText}>{amountLabel}</Text>
             <Text style={amountNote}>
@@ -86,7 +104,9 @@ export function RefundDueAdminEmail({
                 Zahlung in Stripe öffnen
               </Link>
               <Text style={hint}>
-                Dort auf „Refund“ und {amountLabel} als Teilbetrag eintragen.
+                Erst prüfen, ob dort schon eine Erstattung über {amountLabel}{" "}
+                steht. Sonst auf „Refund“ und {amountLabel} als Teilbetrag
+                eintragen.
               </Text>
             </>
           ) : (
@@ -165,6 +185,21 @@ const amountNote: React.CSSProperties = {
   lineHeight: "22px",
   color: "#92400e",
   margin: "4px 0 0",
+};
+
+const reasonBox: React.CSSProperties = {
+  backgroundColor: "#fef2f2",
+  border: "1px solid #fecaca",
+  borderRadius: "8px",
+  padding: "12px 16px",
+  margin: "16px 0",
+};
+
+const reasonText: React.CSSProperties = {
+  fontSize: "14px",
+  lineHeight: "22px",
+  color: "#991b1b",
+  margin: 0,
 };
 
 const infoBox: React.CSSProperties = {

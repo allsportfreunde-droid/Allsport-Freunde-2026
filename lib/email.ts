@@ -242,12 +242,12 @@ export async function sendRegistrationCancelledEmail(
 
 
 /**
- * Meldet dem Team, dass Geld zurückzuzahlen ist.
+ * Meldet dem Team, dass Geld von Hand zurückzuzahlen ist.
  *
- * Erstattet wird von Hand im Stripe-Dashboard – ohne diese Nachricht müsste
- * jemand von sich aus nachsehen, ob storniert wurde, und genau das geht im
- * Alltag unter. Dem Teilnehmer ist der Betrag zu diesem Zeitpunkt bereits
- * zugesagt.
+ * Normalerweise erstattet Stripe automatisch und diese Mail entfällt. Sie
+ * kommt nur, wenn Stripe abgelehnt hat – dann müsste sonst jemand von sich aus
+ * nachsehen, und genau das geht im Alltag unter. Dem Teilnehmer ist der
+ * Betrag zu diesem Zeitpunkt bereits zugesagt.
  *
  * Die drei Links sind der ganze Zweck: zur Zahlung, zu der die Rückzahlung
  * gehört, zur Anmeldung im Admin-Panel und zu der Seite, die der Teilnehmer
@@ -264,6 +264,8 @@ export async function sendRefundDueAdminEmail(data: {
   remainingPersons: number;
   stripeUrl: string | null;
   statusToken: string;
+  /** Warum Stripe die automatische Erstattung abgelehnt hat */
+  failureReason?: string;
 }) {
   const amountLabel = formatEuro(data.amount);
   const namen =
@@ -272,7 +274,9 @@ export async function sendRefundDueAdminEmail(data: {
       : `${data.personNames.length} Personen`;
 
   sendEmail(
-    `Erstattung fällig: ${amountLabel} – ${data.eventTitle}`,
+    data.failureReason
+      ? `Automatische Erstattung fehlgeschlagen: ${amountLabel} – ${data.eventTitle}`
+      : `Erstattung fällig: ${amountLabel} – ${data.eventTitle}`,
     data.adminEmail,
     RefundDueAdminEmail({
       eventTitle: data.eventTitle,
@@ -286,6 +290,7 @@ export async function sendRefundDueAdminEmail(data: {
       // Die Suche ist vorbelegt, damit die Anmeldung nicht zwischen allen
       // anderen gesucht werden muss.
       adminUrl: `${appUrl}/admin/registrations?suche=${encodeURIComponent(data.participantEmail)}`,
+      failureReason: data.failureReason,
     })
   );
 }

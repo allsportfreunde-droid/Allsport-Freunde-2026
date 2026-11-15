@@ -344,21 +344,45 @@ export default function RegistrationDetailModal({
                       }
                     />
                     {/* Storniert wurde bereits und der Teilnehmer hat den
-                        Betrag schriftlich zugesagt bekommen – die Rückzahlung
-                        selbst passiert von Hand im Stripe-Dashboard. */}
-                    {data.refund_due && (
+                        Betrag schriftlich zugesagt bekommen. Stripe zahlt ihn
+                        automatisch zurück; nur was dort abgelehnt wurde, muss
+                        von Hand im Stripe-Dashboard erstattet werden. */}
+                    {data.refund_due && data.refund_due.refunded_amount > 0 && (
+                      <Row
+                        label="Erstattet"
+                        value={
+                          <span className="inline-flex flex-wrap items-center gap-1.5">
+                            <span className="font-semibold text-green-700">
+                              {formatEuro(data.refund_due.refunded_amount)}
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              automatisch über Stripe
+                              {data.refund_due.refunded_at
+                                ? `, ${formatDateTime(data.refund_due.refunded_at)}`
+                                : ""}
+                            </span>
+                          </span>
+                        }
+                      />
+                    )}
+                    {data.refund_due && data.refund_due.open_amount > 0 && (
                       <Row
                         label="Zu erstatten"
                         value={
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="font-semibold text-amber-700">
-                              {formatEuro(data.refund_due.amount)}
+                          <span className="inline-flex flex-col gap-0.5">
+                            <span className="inline-flex flex-wrap items-center gap-1.5">
+                              <span className="font-semibold text-amber-700">
+                                {formatEuro(data.refund_due.open_amount)}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                von Hand im Stripe-Dashboard
+                              </span>
                             </span>
-                            <span className="text-xs text-gray-500">
-                              {data.refund_due.persons === 1
-                                ? "1 abgemeldete Person"
-                                : `${data.refund_due.persons} abgemeldete Personen`}
-                            </span>
+                            {data.refund_due.error && (
+                              <span className="text-xs text-red-700">
+                                Stripe hat abgelehnt: {data.refund_due.error}
+                              </span>
+                            )}
                           </span>
                         }
                       />

@@ -17,9 +17,12 @@ import { withRegistrationLock } from "../lib/db/registration-lock";
 // on session/search_path settings, which the Neon HTTP endpoint may ignore.
 // Run: npm run test:integration. The test role needs CREATE/DROP DATABASE rights.
 // Without the explicit test URL, the regular unit test run skips this suite.
-const services = vi.hoisted(() => ({ retrieve: vi.fn() }));
+const services = vi.hoisted(() => ({
+  retrieve: vi.fn(),
+  refund: vi.fn(async (params: { payment_intent: string }) => ({ id: `re_${params.payment_intent}`, status: "succeeded" })),
+}));
 vi.mock("@/lib/stripe", () => ({
-  getStripe: () => ({ checkout: { sessions: { retrieve: services.retrieve } } }),
+  getStripe: () => ({ checkout: { sessions: { retrieve: services.retrieve } }, refunds: { create: services.refund } }),
   stripePaymentUrl: () => null,
 }));
 vi.mock("@/lib/email", () => ({ sendRegistrationCancelledEmail: vi.fn(), sendRefundDueAdminEmail: vi.fn() }));
@@ -77,7 +80,8 @@ describe.skipIf(!databaseUrl)("cancellation / Stripe PostgreSQL serialization", 
         id UUID PRIMARY KEY, registration_id INTEGER REFERENCES registrations(id), first_name TEXT DEFAULT 'Test',
         last_name TEXT DEFAULT 'Person', is_child BOOLEAN DEFAULT FALSE, checked_in_at TIMESTAMPTZ,
         cancelled_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW(),
-        refund_announced_at TIMESTAMPTZ, refund_amount NUMERIC
+        refund_announced_at TIMESTAMPTZ, refund_amount NUMERIC,
+        refund_status TEXT, stripe_refund_id TEXT, refund_error TEXT, refunded_at TIMESTAMPTZ
       );
       CREATE TABLE cancellation_tokens (
         id TEXT PRIMARY KEY, token TEXT UNIQUE, registration_id INTEGER REFERENCES registrations(id),
@@ -263,8 +267,15 @@ describe.skipIf(!databaseUrl)("cancellation / Stripe PostgreSQL serialization", 
       expect(current).toMatchObject({ cancelled: mode === 'person' ? 1 : 2, payment_state: 'paid', refunds: 1 });
       expect(current.paid_at).not.toBeNull();
       expect(current.used_at !== null).toBe(mode === 'token');
-      const { rows: [refund] } = await admin.query("SELECT data FROM checkout_notifications WHERE registration_id = $1 AND kind = 'refund_due'", [item.id]);
+      const { rows: [refund] } = await admin.query("SELECT data, cancelled_at FROM checkout_notifications WHERE registration_id = $1 AND kind = 'refund_due'", [item.id]);
       expect(refund.data.amount).toBe(mode === 'person' ? 10 : 20);
+      // Stripe erstattet genau einmal; der Admin-Auftrag ist damit hinfällig.
+      const stripeRefunds = services.refund.mock.calls.filter(([params]) => params.payment_intent === `pi_${item.id}`);
+      expect(stripeRefunds).toHaveLength(1);
+      expect(stripeRefunds[0][0]).toMatchObject({ amount: mode === 'person' ? 1000 : 2000 });
+      expect(refund.cancelled_at).not.toBeNull();
+      const { rows: statuses } = await admin.query("SELECT DISTINCT refund_status FROM registration_persons WHERE registration_id = $1 AND cancelled_at IS NOT NULL", [item.id]);
+      expect(statuses).toEqual([{ refund_status: 'refunded' }]);
       const { rows: after } = await admin.query('SELECT id, cancelled_at FROM registration_persons WHERE registration_id = $1 ORDER BY id', [item.id]);
       expect(after).toEqual(before);
     }, 30000);

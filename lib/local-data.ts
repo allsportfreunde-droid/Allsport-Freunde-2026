@@ -111,6 +111,9 @@ function toRegistrationWithEvent(r: LocalReg): RegistrationWithEvent {
     last_name: r.last_name,
     person_count: r.guests + 1,
     child_count: r.persons?.filter((p) => p.is_child && !p.cancelled_at).length ?? 0,
+    // Lokal gibt es keine Zahlungen – offen bei vollem Event heißt Warteliste.
+    on_waitlist: r.status === "pending" && !r.spot_offered_at && isLocalEventFull(r.event_id),
+    event_paid: false,
   };
 }
 

@@ -182,4 +182,11 @@ describe("Statusseite und Kapazität", () => {
     const html = render({ status: "approved", event_full: true });
     expect(html).toContain("Jetzt bezahlen");
   });
+
+  it("lässt bei angebotenem Platz trotz vollem Event bezahlen", () => {
+    const html = render({ status: "pending", event_full: true, spot_offered_at: "2026-11-15T10:00:00Z" });
+    expect(html).toContain("Jetzt bezahlen");
+    expect(html).toContain("Für dich ist ein Platz frei.");
+    expect(html).not.toContain("du stehst auf der");
+  });
 });
